@@ -136,7 +136,19 @@ class UnZipLoRALinearLayer(nn.Module):
             filter_matrix = getattr(self, f"mask_{key}")
             return self.lora_matrix_dic[f"{key}_down"].weight.data * filter_matrix.unsqueeze(1), self.lora_matrix_dic[f"{key}_up"].weight.data
                  
-    
+    def _scaled_dot_product_cross_attention(self, q, k, v, return_rank_vec=True):
+        d = q.shape[-1]
+        scale = 1.0 / torch.sqrt(torch.tensor(float(d), device=q.device, dtype=q.dtype))
+        
+        score = (q @ k) * scale
+
+        attn = torch.softmax(score, dim=-1) 
+        out_mat = attn @ v.T
+
+        if return_rank_vec:
+            return out_mat.sum(dim=0)
+        return out_mat
+
     def get_unziplora_cone(self, key, accumulate=True):
         '''
         Compute cone value for both style and content, store the value in self.column_score
@@ -164,20 +176,28 @@ class UnZipLoRALinearLayer(nn.Module):
                                 self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix + \
                                 merged_weight * merger_gradient
         """
+
+
         if merger_gradient is None:
             if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
-                dL_dU = self.lora_matrix_dic[f"{key}_down"].weight.data.T  * merge_matrix.view(1, -1)
+                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T  * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                merged_gradient = dL_dU.sum(dim=0) * U.sum(dim=1)
+                # 修改后改用 cross attention 进行计算
+                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+                attn_cone = attn_cone_dL_dD
             else:
                 D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
                 dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+
+                # 修改后改用 cross_attntion 进行计算
+                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
-                merged_gradient = dL_dD.sum(dim=0) * U.sum(dim=1) + D.sum(dim=0) * dL_dU.sum(dim=1)
+                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
         else:
             if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
                 D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
@@ -185,24 +205,34 @@ class UnZipLoRALinearLayer(nn.Module):
                 
                 dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
-            
-                merged_gradient = dL_dD.sum(dim=0) * U.sum(dim=1) + D.sum(dim=0) * dL_dU.sum(dim=1)
+
+                # 修改后用cross-attention 进行计算
+                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
+                
+                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
+
             else:
                 D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
                 
                 dD_dB = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
                 dD_dmerge = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
-                dL_dD = dD_dB.sum(dim=0) + dD_dmerge.sum(dim=0)
+                dL_dD = dD_dB + dD_dmerge
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
-            
-                merged_gradient = dL_dD * U.sum(dim=1) + D.sum(dim=0) * dL_dU.sum(dim=1)
+
+                                # 修改后用cross-attention 进行计算
+                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
+                
+                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
+
     
         D = self.lora_matrix_dic[f"{key}_down"].weight.data.T
         U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
         # cone.shape (rank,)
-        cone = D.sum(dim=0) * merged_gradient * U.sum(dim=1)
+        cone = D.sum(dim=0) * attn_cone * U.sum(dim=1)
 
         # 如果是累积，则就是对每个 lora layer 统计 cone
         if accumulate: 
@@ -250,7 +280,6 @@ class UnZipLoRALinearLayer(nn.Module):
     
 
 
-    # * use hard mask and creat filters from top k columns
     def mask_updated_elements(self, key=None, step_ratio=0.1, avoid=True):
         '''
         key:None/"content"/"style" 决定给谁做列许纳泽
@@ -272,56 +301,58 @@ class UnZipLoRALinearLayer(nn.Module):
         # 首先计算选择的列数
         selected_num = int(self.rank * step_ratio) # 已修改
         
-        def _pick_new_columns(mask: torch.Tensor, score: torch.Tensor, selected_num,extra_block_mask: torch.Tensor = None):
-            # existing_mask: 已选列（True 表示不可再次选择）
-            blocked_mask = existing_mask.clone()
-            if extra_block_mask is not None:
-                blocked_mask = blocked_mask | extra_block_mask
-
-            candidate_score = score.clone()
-            candidate_score[blocked_mask] = float("-inf")
-
-            available_num = int((~blocked_mask).sum().item())
-            pick_num = min(selected_num, available_num)
-            if pick_num <= 0:
-                return torch.zeros_like(existing_mask)
-
-            top_values, _ = torch.topk(candidate_score, pick_num)
-            threshold = top_values.min() if top_values.numel() > 0 else float("inf")
-
-            # 保留“超过阈值才入选”的语义
-            selected_current = (candidate_score > threshold) & (~blocked_mask)
-            return selected_current
-        
         if key is None: 
+            # 这是大多数层的情况--该层不再 block separation 的任何一方独占列表中
+            # if key is none, no blocks are masked, i.e: will generate columns mask for both content and style
+            # style mask is the Complement of content
             
+            # 从列稀疏度分数中抽取 selected_num 中选 top-k，
+            top_content_values, _= torch.topk(self.column_score_content, selected_num)
+            # _, top_indices_style = torch.topk(getattr(self, f"column_score_style"), top_k)
+
+            # 取选中的值中的最小值作为阈值
+            if top_content_values.numel() > 0:
+                threshold = top_content_values.min()
+            else:
+                threshold = float('inf')
             
             # 大于阈值的列标为 True， 小于阈值的列标为 False
-            content_mask_current = _pick_new_columns(self.mask_content, self.column_score_content)
-
+            content_mask_current = self.column_score_content > threshold 
             # 与历史 mask 取或保证不会丢失
             self.mask_content = content_mask_current | self.mask_content
             
-            style_block_mask = self.mask_content if avoid else None
-            style_mask_current = _pick_new_columns(
-                self.mask_style, self.column_score_style, style_block_mask
-            )
             #  克隆历史 style 的mask, 之前是对 content mask 操作
-            self.mask_style = style_mask_current | self.mask_style
+            masked_style = self.column_score_style.clone()
+            
+            # 在 avoid 为 True 的时候， 就不可能选到之前 content 选中的列
+            if avoid:
+                masked_style[self.mask_content] = float('-inf') # 把之前 content 选中的列发分数设置为 -inf， 保证一定无法选中，这就保证 content LoRA 和 style LoRA 的列一定不会重合。
+            
+            # 之类的操作和 content 一样选中前 selected_num 列， 
+            top_style_values, _= torch.topk(masked_style, selected_num)
+            if top_style_values.numel() > 0:
+                threshold = top_style_values.min()
+            else:
+                threshold = float('inf')
+            # 将选中的列设置为 True
+            mask_style_current = masked_style > threshold 
+            # 将当前选中的和历史选中的 style mask 取或，保证之前的不丢失。
+            self.mask_style = mask_style_current | self.mask_style
         else:
-            current_mask = getattr(self, f"mask_{key}")
-            current_score = getattr(self, f"column_score_{key}")
-
-            mask_current = _pick_new_columns(current_mask, current_score)
-            setattr(self, f"mask_{key}", mask_current | current_mask)
-
-            # 另一方全开（保持你原逻辑）
+            # * generate sparse mask for given key 
+            # 这里也是同理，不过只会对当前传入的key 做 mask选择, key 是被稀疏的列
+            top_values, _= torch.topk(getattr(self, f"column_score_{key}"), selected_num)
+            if top_values.numel() > 0:
+                threshold = top_values.min()
+            else:
+                threshold = float('inf')
+            mask = getattr(self, f"column_score_{key}") > threshold 
+            setattr(self, f"mask_{key}", mask | getattr(self, f"mask_{key}"))
+            
+            # 另一方就全开，表示可以直接训练
             all_on_key = "content" if key == "style" else "style"
-            setattr(
-                self,
-                f"mask_{all_on_key}",
-                torch.ones(self.rank, device=self.device, dtype=torch.bool),
-            )
+            setattr(self, f"mask_{all_on_key}", torch.ones(self.rank, device=self.device, dtype=torch.bool))
+    
     
     def log_selected_mask(self, key):
         return getattr(self, f"column_score_{key}") * getattr(self, f"mask_{key}")
