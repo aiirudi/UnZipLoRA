@@ -135,7 +135,8 @@ class UnZipLoRALinearLayer(nn.Module):
             # 这里 unsqueeze(1) 是因为这里是逐元素相乘
             filter_matrix = getattr(self, f"mask_{key}")
             return self.lora_matrix_dic[f"{key}_down"].weight.data * filter_matrix.unsqueeze(1), self.lora_matrix_dic[f"{key}_up"].weight.data
-                 
+
+
     def _scaled_dot_product_cross_attention(self, q, k, v, return_rank_vec=True):
         d = q.shape[-1]
         scale = 1.0 / torch.sqrt(torch.tensor(float(d), device=q.device, dtype=q.dtype))
@@ -238,11 +239,11 @@ class UnZipLoRALinearLayer(nn.Module):
         if accumulate: 
             # 下面这个是 abs-cone 方法， 先尝试原方法在尝试 abs-cone 方法
             # setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
-            setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + cone.to(self.device))
+            setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
         else: 
             # 如果不是累积那么就是要选列了，torch.abs(cone) > 1e-5 是用来判断列的“活跃度”
             # 每一列的非 0 数的总和/行数， 就代表这个列的活跃度
-            cone_sparsity = (torch.abs(cone) > 1e-5).float() / cone.shape[0]
+            cone_sparsity = torch.abs(cone)
             setattr(self, f"column_score_{key}", cone_sparsity)
     
     """
@@ -317,7 +318,7 @@ class UnZipLoRALinearLayer(nn.Module):
                 threshold = float('inf')
             
             # 大于阈值的列标为 True， 小于阈值的列标为 False
-            content_mask_current = self.column_score_content > threshold 
+            content_mask_current = self.column_score_content >= threshold 
             # 与历史 mask 取或保证不会丢失
             self.mask_content = content_mask_current | self.mask_content
             
@@ -335,7 +336,7 @@ class UnZipLoRALinearLayer(nn.Module):
             else:
                 threshold = float('inf')
             # 将选中的列设置为 True
-            mask_style_current = masked_style > threshold 
+            mask_style_current = masked_style >= threshold 
             # 将当前选中的和历史选中的 style mask 取或，保证之前的不丢失。
             self.mask_style = mask_style_current | self.mask_style
         else:
@@ -346,7 +347,7 @@ class UnZipLoRALinearLayer(nn.Module):
                 threshold = top_values.min()
             else:
                 threshold = float('inf')
-            mask = getattr(self, f"column_score_{key}") > threshold 
+            mask = getattr(self, f"column_score_{key}") >= threshold
             setattr(self, f"mask_{key}", mask | getattr(self, f"mask_{key}"))
             
             # 另一方就全开，表示可以直接训练

@@ -1,8 +1,8 @@
 export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 
 # Hyper parameters
-export period_sample_epoch=5
-export sampled_column_ratio=0.1
+export period_sample_epoch=4
+export sampled_column_ratio=0.125
 
 # For weight similarity
 export CONTENT_LR=0.00005
