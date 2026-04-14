@@ -4,7 +4,12 @@ import torch
 from torch import nn
 import copy
 
+from typing import ClassVar,Optional
+
 class UnZipLoRALinearLayer(nn.Module):
+    
+    _active_mask: ClassVar[Optional[torch.Tensor]] = None # 全局mask, 为了对齐 class token 和 rare token
+    
     def __init__(
         self,
         in_features: int, 
@@ -278,7 +283,6 @@ class UnZipLoRALinearLayer(nn.Module):
                 
             setattr(self, "merge_content", merge_content)
             setattr(self, "merge_style", merge_style)
-    
 
 
     def mask_updated_elements(self, key=None, step_ratio=0.1, avoid=True):
@@ -306,9 +310,11 @@ class UnZipLoRALinearLayer(nn.Module):
             # 这是大多数层的情况--该层不再 block separation 的任何一方独占列表中
             # if key is none, no blocks are masked, i.e: will generate columns mask for both content and style
             # style mask is the Complement of content
+            masked_content = self.column_score_content.clone()        
+            masked_content[self.mask_content] = float('-inf')
             
             # 从列稀疏度分数中抽取 selected_num 中选 top-k，
-            top_content_values, _= torch.topk(self.column_score_content, selected_num)
+            top_content_values, _= torch.topk(masked_content, selected_num)
             # _, top_indices_style = torch.topk(getattr(self, f"column_score_style"), top_k)
 
             # 取选中的值中的最小值作为阈值
@@ -318,17 +324,18 @@ class UnZipLoRALinearLayer(nn.Module):
                 threshold = float('inf')
             
             # 大于阈值的列标为 True， 小于阈值的列标为 False
-            content_mask_current = self.column_score_content >= threshold 
+            content_mask_current = masked_content > threshold
             # 与历史 mask 取或保证不会丢失
             self.mask_content = content_mask_current | self.mask_content
             
+
             #  克隆历史 style 的mask, 之前是对 content mask 操作
             masked_style = self.column_score_style.clone()
-            
+            masked_style[self.mask_style] = float('-inf')
             # 在 avoid 为 True 的时候， 就不可能选到之前 content 选中的列
             if avoid:
                 masked_style[self.mask_content] = float('-inf') # 把之前 content 选中的列发分数设置为 -inf， 保证一定无法选中，这就保证 content LoRA 和 style LoRA 的列一定不会重合。
-            
+
             # 之类的操作和 content 一样选中前 selected_num 列， 
             top_style_values, _= torch.topk(masked_style, selected_num)
             if top_style_values.numel() > 0:
@@ -336,18 +343,21 @@ class UnZipLoRALinearLayer(nn.Module):
             else:
                 threshold = float('inf')
             # 将选中的列设置为 True
-            mask_style_current = masked_style >= threshold 
+            mask_style_current = masked_style > threshold 
             # 将当前选中的和历史选中的 style mask 取或，保证之前的不丢失。
             self.mask_style = mask_style_current | self.mask_style
         else:
+            score = getattr(self, f"column_score_{key}").clone()
+            score[getattr(self, f"mask_{key}")] = float('-inf')
             # * generate sparse mask for given key 
             # 这里也是同理，不过只会对当前传入的key 做 mask选择, key 是被稀疏的列
-            top_values, _= torch.topk(getattr(self, f"column_score_{key}"), selected_num)
+            top_values, _= torch.topk(score, selected_num)
             if top_values.numel() > 0:
                 threshold = top_values.min()
             else:
                 threshold = float('inf')
-            mask = getattr(self, f"column_score_{key}") >= threshold
+
+            mask = score > threshold
             setattr(self, f"mask_{key}", mask | getattr(self, f"mask_{key}"))
             
             # 另一方就全开，表示可以直接训练
@@ -419,7 +429,6 @@ class UnZipLoRALinearLayer(nn.Module):
 
             D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style
             U_style = self.lora_matrix_dic["style_up"].weight.T
-
 
             if self.masked_matrix["style"] is True:
                 D_style = D_style * self.mask_style
