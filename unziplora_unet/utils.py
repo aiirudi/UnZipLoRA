@@ -2,8 +2,11 @@ import os
 from typing import Optional, Dict, Union
 from huggingface_hub import hf_hub_download
 import copy 
+import math
 
 import torch
+import torch.nn.functional as F
+
 from safetensors import safe_open
 from diffusers.loaders.lora import LORA_WEIGHT_NAME_SAFE
 import itertools
@@ -22,6 +25,11 @@ from transformers import (
     CLIPTextModelWithProjection,
     )
 from record_utils.cone import cone_matrix, cone_column_sparsity, draw_concatenated_heatmap
+
+# 绘制热力图函数
+from matplotlib import colormaps
+from PIL import Image
+import numpy as np
 
 universal_nevigate = [
 "watermark", "lowres", "low quality",
@@ -755,3 +763,193 @@ def lora_gradient_zeroout(unet: UNet2DConditionModel, finetune_mask):
             lora_layer = getattr(module, "lora_layer")
             if lora_layer is not None:
                 lora_layer.set_gradient_mask(finetune_mask)
+
+
+# ---------------------------生成热力图的函数和工具类---------------------------
+
+class RecordingCrossAttnProcessor:
+    def __init__(self, inner, token_ids, map_size=64):
+        self.inner = inner
+        self.token_ids = sorted(set(int(i) for i in token_ids))
+        self.counts = {}
+        self.sums = {}
+        self.map_size = map_size
+    
+    def _accum(self, attn, hidden_states, encoder_hidden_states, encoder_hidden_states_content, 
+               encoder_hidden_states_style,attention_mask):
+        if (encoder_hidden_states is None and encoder_hidden_states_content is None) or not self.token_ids:
+            return
+        if hidden_states.dim() != 3: 
+            return
+        
+        bsz, q_len, _ = hidden_states.shape
+        attn_mask = attn.prepare_attention_mask(attention_mask, q_len, bsz)
+
+        enc = encoder_hidden_states
+        enc_content = encoder_hidden_states_content
+        enc_style = encoder_hidden_states_style
+        if attn.norm_cross is not None:
+            enc = attn.norm_cross(enc)
+            enc_content = attn.norm_cross(enc_content)
+            enc_style = attn.norm_cross(enc_style)
+        
+        # 这里的输入是不是要和重构的 Attention Block 的输入对齐
+        q, k = None, None
+        if isinstance(attn.to_q.lora_layer, (UnZipLoRALinearLayer, UnZipLoRALinearLayerInfer)):
+            q = attn.head_to_batch_dim(attn.to_q(hidden_states, hidden_states_1=hidden_states, hidden_states_2=hidden_states))
+        else:
+            q = attn.head_to_batch_dim(attn.to_q(hidden_states))
+        
+        if isinstance(attn.to_k.lora_layer, (UnZipLoRALinearLayer, UnZipLoRALinearLayerInfer)):
+            k = attn.head_to_batch_dim(attn.to_k(enc, hidden_states_1=enc_content, hidden_states_2=enc_style))
+        else:
+            k = attn.head_to_batch_dim(attn.to_k(enc))
+
+        
+        # 计算注意力概率形状
+        probs = attn.get_attention_scores(q, k, attn_mask)
+        
+        heads = attn.heads
+        probs = probs.view(bsz, heads, probs.shape[-2], probs.shape[-1])
+
+        for tid in self.token_ids:
+            if tid < 0 or tid >= probs.shape[-1]:
+                continue
+                
+            m = probs[..., tid].mean(dim=1)
+
+            side = int(math.sqrt(m.shape[-1]))
+            if side * side != m.shape[-1]:
+                continue
+                
+            m = m.view(bsz, 1, side, side)
+            m = F.interpolate(m, size=(self.map_size, self.map_size), mode="bilinear", align_corners=False)
+            
+            # 对于 CFG 来说，这里是在平均 CFG 的分支
+            m = m.mean(dim=0).squeeze(0).detach()  # (H,W)
+            if tid not in self.sums:
+                self.sums[tid] = torch.zeros_like(m)
+                self.counts[tid] = 0
+            self.sums[tid] += m
+            self.counts[tid] += 1
+    
+    @torch.no_grad()
+    def __call__(self, attn,
+                  hidden_states: torch.FloatTensor, 
+                  encoder_hidden_states: Optional[torch.FloatTensor] = None, 
+                  encoder_hidden_states_content: Optional[torch.FloatTensor] = None,
+                  encoder_hidden_states_style: Optional[torch.FloatTensor] = None,
+                  attention_mask: Optional[torch.FloatTensor] = None,
+                  temb: Optional[torch.FloatTensor] = None, scale: float=1.0, *args, **kwargs):
+        self._accum(attn, hidden_states, encoder_hidden_states, encoder_hidden_states_content, 
+                    encoder_hidden_states_style, attention_mask)
+        
+        from unziplora_unet import attention_processor as uzap
+
+        if isinstance(self.inner, (uzap.AttnProcessor, uzap.AttnProcessor2_0)):
+            return self.inner(
+                attn,
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_hidden_states_content=encoder_hidden_states_content,
+                encoder_hidden_states_style=encoder_hidden_states_style,
+                attention_mask=attention_mask,
+                temb=temb, scale=scale
+            )
+        else:
+            return self.inner(
+                attn,
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=attention_mask,
+                temb=temb, scale=scale
+            )
+    
+    def get_map(self, token_ids):
+        maps = []
+        for tid in token_ids:
+            if tid in self.sums and self.counts[tid] > 0:
+                maps.append(self.sums[tid] / self.counts[tid])
+        
+        if not maps:
+            return None
+        return torch.stack(maps, dim=0).mean(dim=0)
+    
+    # 新增的一个清除每张图统计数据
+    def reset(self):
+        self.counts.clear()
+        self.sums.clear()
+
+
+def attach_recorders_to_unet(unet, token_ids, map_size=64):
+    wrappers, original = [], {}
+    for name, module in unet.named_modules():
+        if hasattr(module, "processor") and ".attn2" in name:
+            original[name] = module.processor
+            w = RecordingCrossAttnProcessor(module.processor, token_ids, map_size=map_size)
+            module.processor = w
+            wrappers.append(w)
+
+    return wrappers, original
+
+
+def aggregate_maps(recorders, token_ids):
+    acc, n = None, 0
+    for r in recorders:
+        m = r.get_map(token_ids)
+        if m is None:
+            continue
+        acc = m if acc is None else (acc + m)
+        n += 1
+    return None if n == 0 else acc / n
+
+def overlay_heatmap(img, heat, alpha=0.45):
+    heat = heat.float()
+    heat = (heat - heat.min()) / (heat.max() - heat.min() + 1e-6)
+    heat_np = heat.detach().cpu().numpy()
+    heat_rgb = colormaps.get_cmap("jet")(heat_np)[..., :3]
+    heat_img = Image.fromarray((heat_rgb * 255).astype(np.uint8)).resize(img.size, Image.BILINEAR)
+
+    base = np.asarray(img).astype(np.float32) / 255.0
+    over = np.asarray(heat_img).astype(np.float32) / 255
+    out = (1 - alpha) * base + alpha * over
+    return Image.fromarray(np.clip(out * 255, 0, 255).astype(np.uint8))
+
+def build_token_masks(tokenizer, prompts, rare_word, super_word, device):
+    enc = tokenizer(
+        prompts,
+        padding="max_length",
+        max_length=tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    )
+    input_ids = enc.input_ids.to(device)
+
+    rare_ids = tokenizer.encode(" " + rare_word, add_special_tokens=False)
+    super_ids = tokenizer.encode(" " + super_word, add_special_tokens=False)
+    rare_ids = torch.tensor(rare_ids, device=device)
+    super_ids = torch.tensor(super_ids, device=device)
+
+    B, T = input_ids.shape
+    rare_mask = torch.zeros((B, T), dtype=torch.bool, device=device)
+    super_mask = torch.zeros_like(rare_mask)
+
+    for b in range(B):
+        for j in range(T - len(rare_ids) + 1):
+            if (rare_ids == input_ids[b, j: j + len(rare_ids)]).all():
+                rare_mask[b, j: j + len(rare_ids)] = True
+        
+        for j in range(T - len(super_ids) + 1):
+            if (super_ids == input_ids[b, j : j + len(super_ids)]).all():
+                super_mask[b, j: j + len(super_ids)] = True
+    return rare_mask, super_mask
+
+def concat_triplet(a, b, c):
+    w, h = a.size
+    canvas = Image.new("RGB", (w * 3, h))
+    canvas.paste(a, (0, 0))
+    canvas.paste(b, (w, 0))
+    canvas.paste(c, (w * 2, 0))
+    return canvas
+# ---------------------------生成热力图的函数和工具类---------------------------
+

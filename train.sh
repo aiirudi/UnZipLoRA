@@ -1,5 +1,9 @@
 export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 
+#heatmap parameter
+RARE_TOKEN="monadikos"          # 例如：xlo
+CLASS_WORD="cat"          # 例如：dog
+
 # Hyper parameters
 export period_sample_epoch=4
 export sampled_column_ratio=0.125
@@ -13,22 +17,28 @@ export RANK=64
 export WANDB_NAME="unziplora"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
 export OUTPUT_DIR="models/anime_cat/anime_cat"
-export STEPS=600
+export STEPS=2
 
-# Training prompt
-export PROMPT="A monadikos cat in anime style"
-export CONTENT_FORWARD_PROMPT="A monadikos cat"
-export STYLE_FORWARD_PROMPT="A cat in anime style"
+# Training prompt 
+
+# both prompt
+export PROMPT="A ${RARE_TOKEN} ${CLASS_WORD} in anime style"
+# content prompt 
+export CONTENT_FORWARD_PROMPT="A ${RARE_TOKEN} ${CLASS_WORD}" 
+# style prompt
+export STYLE_FORWARD_PROMPT="A ${CLASS_WORD} in anime style" 
+
 # For validation
-export VALID_CONTENT="A monadikos cat on a table"
-export VALID_PROMPT="A monadikos cat on a table in anime style"
-export VALID_STYLE="A cat in anime style on a table"
+export VALID_CONTENT="A ${RARE_TOKEN} ${CLASS_WORD} on a table"
+export VALID_PROMPT="A ${RARE_TOKEN} ${CLASS_WORD} on a table in anime style"
+export VALID_STYLE="A ${CLASS_WORD} in anime style on a table"
 
 # for content validation
-export VALID_CONTENT_PROMPT="a photo of a monadikos cat on a table"
+export VALID_CONTENT_PROMPT="a photo of a ${RARE_TOKEN} ${CLASS_WORD} on a table"
 
 # for style validation
 export VALID_STYLE_PROMPT="A dog in anime style"
+
 export WANDB_PROJECT="unziplora"
 
 accelerate launch train_unziplora.py \
@@ -62,3 +72,9 @@ accelerate launch train_unziplora.py \
   --sample_times=$period_sample_epoch \
   --column_ratio=$sampled_column_ratio \
   --entity="elysiaareudi-discord" \
+  --rare_word="${RARE_TOKEN}" \
+  --class_word="${CLASS_WORD}" \
+  --heatmap_map_size=64 \
+  --heatmap_alpha=0.45 \
+  --heatmap_steps=100 \
+  --with_image_per_validation

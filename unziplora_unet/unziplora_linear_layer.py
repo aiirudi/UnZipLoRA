@@ -68,6 +68,10 @@ class UnZipLoRALinearLayer(nn.Module):
         self.forward_type = "both"
         self.device = device
     
+    @classmethod
+    def set_mask(cls, mask: Optional[torch.Tensor]) -> None:
+        cls._active_mask = mask
+
     def set_cone_score(self, key):
         setattr(self, f"column_score_{key}", torch.zeros(self.rank))
     
@@ -154,6 +158,7 @@ class UnZipLoRALinearLayer(nn.Module):
         if return_rank_vec:
             return out_mat.sum(dim=0)
         return out_mat
+    
 
     def get_unziplora_cone(self, key, accumulate=True):
         '''
@@ -227,7 +232,7 @@ class UnZipLoRALinearLayer(nn.Module):
                 dL_dD = dD_dB + dD_dmerge
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                                # 修改后用cross-attention 进行计算
+                # 修改后用cross-attention 进行计算
                 attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
                 attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
@@ -238,6 +243,7 @@ class UnZipLoRALinearLayer(nn.Module):
         U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
         # cone.shape (rank,)
+        # 这里也可以用 D * attn_cone 当作key, U 当作 k, v 再来一次 CA 计算出最后的 cone
         cone = D.sum(dim=0) * attn_cone * U.sum(dim=1)
 
         # 如果是累积，则就是对每个 lora layer 统计 cone
@@ -320,7 +326,8 @@ class UnZipLoRALinearLayer(nn.Module):
         if selected_num <= 0:
             return
 
-        if key is None:
+        # 可以用来加一个 cone 阈值，来表示每次最多选 8 个rank列，但是少于 8 个rank列我就只选超过阈值的rank列我就只选
+        if key is None: # both
             self.mask_content = self._select_new_mask(
                 self.column_score_content,
                 self.mask_content,
@@ -375,7 +382,6 @@ class UnZipLoRALinearLayer(nn.Module):
             masked_content_weight = D_content @ U_content
 
             # 输入乘以最终权重 content_text_prompt_hidden_states (B, seq, in) @ masked_content_weight : (in, out) -> up_hidden_states_content (B, seq, outs)
-            
             up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
             
             # 和上段同理，这里就是变成了对 style_lora_weight操作而已

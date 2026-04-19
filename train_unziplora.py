@@ -66,6 +66,7 @@ from unziplora_unet.pipeline_stable_diffusion_xl import StableDiffusionXLUnZipLo
 from unziplora_unet.unet_2d_condition import UNet2DConditionModel
 from unziplora_unet.utils import *
 
+
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.24.0.dev0")
 
@@ -876,6 +877,16 @@ def parse_args(input_args=None):
     parser.add_argument("--tags", nargs="*", default=[], help="Tags of wandb project",)
     parser.add_argument("--entity", type=str, default="changln")
     parser.add_argument("--wandb_dir", type=str, default=None)
+
+    # 热力图参数
+    parser.add_argument("--rare_word", type=str,default="",help="The rare word to be used for cross attention regularization.",)
+    parser.add_argument("--class_word",type=str,default="",help="The class word to be used for cross attention regularization.",
+    )    
+    parser.add_argument("--with_content_heatmap", action="store_true",help="Log content-only token heatmap during content validation.")
+    parser.add_argument("--heatmap_steps", type=int, default=100,help="Run heatmap every N global steps. 0 disables cadence gate.")
+    parser.add_argument("--heatmap_map_size", type=int, default=64,help="Internal heatmap map size.")
+    parser.add_argument("--heatmap_alpha", type=float, default=0.45,help="Overlay alpha.")
+
     
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1423,6 +1434,7 @@ def main(args):
             )
         )
 
+
         # TODO: Only for content and style
         def collect_params(lora_module, parameters, model_key=None):
             for key, layer in lora_module.lora_matrix_dic.items():
@@ -1455,6 +1467,71 @@ def main(args):
         unet_lora_weight = collect_weight(attn_module.to_k.lora_layer, unet_lora_weight, model_key="style")
         unet_lora_weight = collect_weight(attn_module.to_v.lora_layer, unet_lora_weight, model_key="style")
         unet_lora_weight = collect_weight(attn_module.to_out[0].lora_layer, unet_lora_weight, model_key="style")
+
+    # ------------------------------------------------------------
+    #热力图保存类的一些函数
+    ENABLE_LORA_CAPTURE = True              
+    ENABLE_BASE_CAPTURE = True              
+
+    content_lora_capture = {"k": [], "v": []}                                  
+    #content_base_capture = {"k": []}   #暂时不需要先，只用记录看看 content LoRA 是否把注意力注意在物体上
+
+    def _clear_content_lora_capture():
+        for v in content_lora_capture.values():
+            v.clear()
+          
+    @torch.no_grad()
+    def _compute_content_delta(lora_layer, hidden_states_content):
+        if hidden_states_content is None:
+            return None
+
+        if "content_down" not in lora_layer.lora_matrix_dic or "content_up" not in lora_layer.lora_matrix_dic:
+            return None
+
+        down = lora_layer.lora_matrix_dic["content_down"].weight.T   # [in, rank]
+        up = lora_layer.lora_matrix_dic["content_up"].weight.T       # [rank, out]
+        merge = lora_layer.merge_content                             # [rank]
+
+        if lora_layer.masked_matrix.get("content", False):
+            merge = merge * lora_layer.mask_content.to(dtype=merge.dtype, device=merge.device)
+
+        merged_w = (down * merge) @ up                              # [in, out]
+        delta = hidden_states_content.to(merged_w.dtype) @ merged_w # [B, T, out] or [N, out]
+        return delta.to(hidden_states_content.dtype)
+ 
+    def _make_content_lora_hook(kind: str):
+        def _hook(module, inp, out):
+            if not ENABLE_LORA_CAPTURE:
+                return
+            x = inp[0] if len(inp) > 0 else None
+
+            delta = _compute_content_delta(module, x)
+
+            if x.dim() == 3:
+                b, t, d = x.shape
+                base = F.linear(x.view(-1, d), module.weight, module.bias).view(b, t, -1)
+            else:
+                base = F.linear(x, module.weight, module.bias)
+
+            delta_masked = out - base                      
+            content_lora_capture[kind].append(delta_masked)
+        return _hook
+
+    """  
+    # 暂时不需要, 等到后面需要加入,  TAL 的时候才需要引入  
+    def _make_content_base_hook(kind: str):
+        def _hook(module, inp, _out):
+            if not ENABLE_BASE_CAPTURE:
+                return
+            x = inp[0]
+            if x.dim() == 3:
+                b, t, d = x.shape
+                base = F.linear(x.view(-1, d), module.weight, module.bias).view(b, t, -1)
+            else:
+                base = F.linear(x, module.weight, module.bias)
+            base_capture[kind].append(base)
+        return _hook
+    """
 
     if args.seed is not None:
         set_seed(args.seed)
@@ -1956,6 +2033,9 @@ def main(args):
         validation_prompt=None,
         validation_prompt_content=None,
         validation_prompt_style=None,
+        generate_heatmap=False,
+        tokenizer_one=None, 
+        tokenizer_two=None
     ):
         logger.info(
             f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
@@ -1986,8 +2066,43 @@ def main(args):
                             "prompt_style": validation_prompt_style}
         else:   
             pipeline_args = {"prompt": validation_prompt}
-        images = [pipeline(**pipeline_args, generator=generator, negative_prompt=", ".join(f"({w}:1.2)" for w in universal_nevigate)).images[0] for _ in range(args.num_validation_images)]
         
+        if not generate_heatmap:
+            images = [pipeline(**pipeline_args, generator=generator, negative_prompt=", ".join(f"({w}:1.2)" for w in universal_nevigate)).images[0] for _ in range(args.num_validation_images)]
+            heatmap_panels = []
+        else:
+            images, heatmap_panels = [], []
+
+            recs, original_procs = None, None
+            rare1, cls1 = build_token_masks(tokenizer_one, [validation_prompt], args.rare_word, args.class_word, accelerator.device)
+            rare2, cls2 = build_token_masks(tokenizer_two, [validation_prompt], args.rare_word, args.class_word, accelerator.device)
+
+            rare_ids = torch.where((rare1 | rare2)[0])[0].tolist()
+            cls_ids = torch.where((cls1 | cls2)[0])[0].tolist()
+            target_ids = sorted(set(rare_ids + cls_ids))
+
+            recs, original_procs = attach_recorders_to_unet(pipeline.unet, target_ids, map_size=args.heatmap_map_size)
+
+            try:
+                for i in range(args.num_validation_images):
+                    if recs is not None:
+                        for r in recs:
+                            r.reset()
+
+                    gen = torch.Generator(device=accelerator.device).manual_seed((args.seed or 0) + i)                               
+                    img = pipeline(**pipeline_args, generator=gen,negative_prompt=", ".join(f"({w}:1.2)" for w in universal_nevigate)).images[0]
+                    images.append(img)  
+                    if recs is not None:
+                        rare_map = aggregate_maps(recs, rare_ids)
+                        cls_map  = aggregate_maps(recs, cls_ids)                                                                     
+                        rare_ov = overlay_heatmap(img, rare_map, args.heatmap_alpha) if rare_map is not None else img
+                        cls_ov  = overlay_heatmap(img, cls_map,  args.heatmap_alpha) if cls_map  is not None else img  
+                        heatmap_panels.append((rare_ov, cls_ov))              
+            finally:
+                for name, proc in original_procs.items():
+                    module = pipeline.unet.get_submodule(name)
+                    module.processor = proc 
+
         if accelerator.trackers[0].name == "tensorboard":
             image_lst = np.stack([np.asarray(img) for img in images])
         if accelerator.trackers[0].name == "wandb":
@@ -1997,7 +2112,8 @@ def main(args):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             
-        return images, image_lst
+        return images, image_lst, heatmap_panels
+
     # 将图片列表水平拼接成一张大图
     def concatenate_horizontal_img(img_lst):
         img_lst = [img.convert('RGB') if img.mode != 'RGB' else img for img in img_lst]
@@ -2180,6 +2296,7 @@ def main(args):
                         prior_loss_content = F.mse_loss(
                             model_pred_content.float(), noise.float(), reduction="mean"
                         )
+                        
                         unziplora_set_forward_type(unet, type="both")
                         loss = loss + args.prior_loss_weight * prior_loss_content
                     # print("content", noise.shape, model_inputs[1].shape, model_pred_content.shape)
@@ -2376,7 +2493,7 @@ def main(args):
         #     print("main process")
             if (
                 args.validation_content is not None and args.validation_style is not None
-                and (global_step - 1) % args.validation_epochs == 0 and (global_step - 1) > 200
+                and args.heatmap_steps > 0 and (global_step - 1) % args.heatmap_steps == 0 and (global_step - 1) > 0
             ):
                 if args.with_image_per_validation:
                     # create pipeline
@@ -2423,14 +2540,48 @@ def main(args):
                     # run inference
                     logged_images = []
                     saved_images = []
-                    
-                    images, _ = log_validation(pipeline, args, accelerator, args.validation_prompt, args.validation_prompt, args.validation_prompt)
+
+                    images, _, heatmap_panels = log_validation(
+                        pipeline, 
+                        args, 
+                        accelerator, 
+                        args.validation_prompt, 
+                        args.validation_prompt, 
+                        args.validation_prompt,
+                        generate_heatmap=True,
+                        tokenizer_one=tokenizer_one,
+                        tokenizer_two=tokenizer_two)
+                    if len(heatmap_panels) > 0:
+                        rare_heatmaps = [t[0] for t in heatmap_panels]
+                        cls_heatmaps = [t[1] for t in heatmap_panels]
+                    else:
+                        rare_heatmaps, cls_heatmaps = [], []
+
+                    logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+                    logged_images.append(concatenate_horizontal_img(cls_heatmaps))
                     logged_images.append(concatenate_horizontal_img(images))
                     saved_images += images
+                   
                     # 只生成 content 图片
                     if args.validation_prompt_content is not None:
                         unziplora_set_forward_type(unet, type="content")
-                        images, _ = log_validation(pipeline, args, accelerator, args.validation_prompt_content, args.validation_prompt_content, args.validation_prompt_content)
+                        images, _ , heatmap_panels = log_validation(pipeline, 
+                            args, accelerator, 
+                            args.validation_prompt_content, 
+                            args.validation_prompt_content, 
+                            args.validation_prompt_content,
+                            generate_heatmap=True,
+                            tokenizer_one=tokenizer_one,
+                            tokenizer_two=tokenizer_two
+                        )
+                        if len(heatmap_panels) > 0:
+                            rare_heatmaps = [t[0] for t in heatmap_panels]
+                            cls_heatmaps = [t[1] for t in heatmap_panels]
+                        else:
+                            rare_heatmaps, cls_heatmaps = [], []
+
+                        logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+                        logged_images.append(concatenate_horizontal_img(cls_heatmaps))
                         logged_images.append(concatenate_horizontal_img(images))
                         saved_images += images
                         unziplora_set_forward_type(unet, type="both")
@@ -2438,7 +2589,7 @@ def main(args):
                     # 只生成 style 图片
                     if args.validation_prompt_style is not None:
                         unziplora_set_forward_type(unet, type="style")
-                        images, _ = log_validation(pipeline, args, accelerator,args.validation_prompt_style, args.validation_prompt_style, validation_prompt_style=args.validation_prompt_style)
+                        images, _, _ = log_validation(pipeline, args, accelerator, args.validation_prompt_style, args.validation_prompt_style, validation_prompt_style=args.validation_prompt_style)
                         logged_images.append(concatenate_horizontal_img(images))
                         saved_images += images
                         unziplora_set_forward_type(unet, type="both")
@@ -2580,18 +2731,28 @@ def main(args):
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             # 生成推理图片
-            images, image_list = log_validation(
+            images, image_list, heatmap_panels = log_validation(
                 pipeline,
                 args,
                 accelerator,
                 args.validation_prompt,
                 args.validation_prompt,
                 args.validation_prompt,
+                generate_heatmap=args.heatmap_steps > 0,
+                tokenizer_one=tokenizer_one,
+                tokenizer_two=tokenizer_two
             )
+            if len(heatmap_panels) > 0:
+                rare_heatmaps = [t[0] for t in heatmap_panels]
+                cls_heatmaps = [t[1] for t in heatmap_panels]
+            else:
+                rare_heatmaps, cls_heatmaps = [], []
+            logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+            logged_images.append(concatenate_horizontal_img(cls_heatmaps))
             # 把单张图片拼成一行
             logged_images.append(concatenate_horizontal_img(images))
             saved_images += images
-        
+
         # 只在有 content_prompt 下生成图片
         if args.validation_prompt_content and args.num_validation_images > 0:
             pipeline = StableDiffusionXLPipeline.from_pretrained(
@@ -2603,12 +2764,24 @@ def main(args):
             pipeline.load_lora_weights(f"{args.output_dir}_content")
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
-            images, image_list = log_validation(
+            images, image_list, heatmap_panels = log_validation(
                 pipeline,
                 args,
                 accelerator,
                 args.validation_prompt_content,
+                generate_heatmap=args.heatmap_steps > 0,
+                tokenizer_one=tokenizer_one,
+                tokenizer_two=tokenizer_two
             )
+            
+            if len(heatmap_panels) > 0:
+                rare_heatmaps = [t[0] for t in heatmap_panels]
+                cls_heatmaps = [t[1] for t in heatmap_panels]
+            else:
+                rare_heatmaps, cls_heatmaps = [], []
+
+            logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+            logged_images.append(concatenate_horizontal_img(cls_heatmaps))
             logged_images.append(concatenate_horizontal_img(images))
             saved_images += images
         
@@ -2623,7 +2796,7 @@ def main(args):
             pipeline.load_lora_weights(f"{args.output_dir}_style")
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
-            images, image_list = log_validation(
+            images, image_list, heatmap_panels = log_validation(
                 pipeline,
                 args,
                 accelerator,

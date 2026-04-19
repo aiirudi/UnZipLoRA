@@ -692,10 +692,9 @@ class CrossAttnDownBlock2D(CrossAttnDownBlock2D):
 
         blocks = list(zip(self.resnets, self.attentions))
 
+        # self.attentions 中全是 Transformer2DModel
         for i, (resnet, attn) in enumerate(blocks):
-            
             if self.training and self.gradient_checkpointing:
-
                 def create_custom_forward(module, return_dict=None):
                     def custom_forward(*inputs):
                         if return_dict is not None:

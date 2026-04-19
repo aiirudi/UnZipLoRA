@@ -102,6 +102,7 @@ class Attention(Attention):
                 AttnProcessor2_0() if hasattr(F, "scaled_dot_product_attention") and self.scale_qk else AttnProcessor()
             )
         self.set_processor(processor)
+
     def set_processor(self, processor: "AttnProcessor", _remove_lora: bool = False) -> None:
         r"""
         Set the attention processor to use.
