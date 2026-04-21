@@ -1,0 +1,11 @@
+*__pycache__*
+output/*
+*.png
+*.pyc
+wandb/*
+output/*
+*.pth
+*.safetensors
+models/
+*.sub
+logs/
