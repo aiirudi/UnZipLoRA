@@ -17,7 +17,7 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora-尝试加入hook,获取styleLoRA的输出"
+export WANDB_NAME="unziplora-加入gsa后热力图"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
 export OUTPUT_DIR="models/anime_cat/anime_cat"
 export STEPS=600
@@ -43,9 +43,6 @@ export VALID_CONTENT_PROMPT="a photo of a ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on
 export VALID_STYLE_PROMPT="A ${SUPER_WORD} in ${STYLE_RARE_TOKEN} style"
 
 export WANDB_PROJECT="unziplora"
-
-# style 热力图的两个关键词
-#  --style_rare_word="${STYLE_RARE_TOKEN}" \
 
 accelerate launch train_unziplora.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
@@ -81,10 +78,12 @@ accelerate launch train_unziplora.py \
   --content_rare_word="${CONTENT_RARE_TOKEN}" \
   --class_word="${CLASS_WORD}" \
   --style_rare_word="${STYLE_RARE_TOKEN}" \
-  --super_word="${SUPER_WORD}"
+  --super_word="${SUPER_WORD}" \
   --heatmap_map_size=64 \
   --heatmap_alpha=0.45 \
   --heatmap_steps=100 \
   --focus='true' \
   --with_align_loss="true" \
-  --align_loss_weight=1.0
+  --align_loss_weight=1.0 \
+  --with_gsa_loss="true" \
+  --gsa_loss_weight=1.0

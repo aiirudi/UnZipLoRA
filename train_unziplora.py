@@ -893,14 +893,21 @@ def parse_args(input_args=None):
     parser.add_argument("--class_word",type=str,default="",help="The class word to be used for cross attention regularization.",
     )    
     
-    """
+    # 检查style token 生成的热力图
     parser.add_argument("--style_rare_word",type=str,default="",help="The class word to be used for cross attention regularization.",
     ) 
-    """
-
+    parser.add_argument("--super_word",type=str,default="",help="The class word to be used for cross attention regularization.",
+    ) 
     parser.add_argument("--with_content_heatmap", action="store_true",help="Log content-only token heatmap during content validation.")
     parser.add_argument("--heatmap_steps", type=int, default=100,help="Run heatmap every N global steps. 0 disables cadence gate.")
-    parser.add_argument("--heatmap_map_size", type=int, default=64,help="Internal heatmap map size.")
+    parser.add_argument(
+        "--heatmap_map_size",
+        "--heatmap_size",
+        dest="heatmap_map_size",
+        type=int,
+        default=64,
+        help="Internal heatmap map size.",
+    )
     parser.add_argument("--heatmap_alpha", type=float, default=0.45,help="Overlay alpha.")
 
     # TFM 和 TAL 参数设置
@@ -908,6 +915,9 @@ def parse_args(input_args=None):
     parser.add_argument("--with_align_loss", type=str2bool, default='false', help='启用 rare→class 对齐损失。')
     parser.add_argument("--align_loss_weight", type=float, default=1.0, help='对齐损失权重。')
 
+    # GSA loss 参数
+    parser.add_argument("--with_gsa_loss", type=str2bool, default='false', help='启用 gsa 损失。')
+    parser.add_argument("--gsa_loss_weight", type=float, default=1.0, help='gsa 损失权重。')
     
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -2151,9 +2161,13 @@ def main(args):
     # 设置捕获 LoRA 输入输出, 设置钩子函数
     ENABLE_LORA_CAPTURE = True              
     ENABLE_BASE_CAPTURE = True    
+    ENABLE_STYLE_CAPTURE = True
 
     lora_content_capture = {"k": [], "v": []}
     base_capture = {"k": []}
+    
+    lora_style_probs_capture = [] # 用于捕获 style lora 的输出
+
     def _make_content_lora_hook(kind: str):
         def _hook(module, args, kwargs, output):
             if not ENABLE_LORA_CAPTURE:
@@ -2166,6 +2180,89 @@ def main(args):
                 D = D *  module.mask_content
             content_out = content_inp @ (D @ U)
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
+        return _hook
+
+    # 在 both prompt 中加入提示词
+    style_rare_1, _ = build_token_masks(tokenizer_one, [args.instance_prompt], 
+    rare_word = args.style_rare_word, super_word="", device=accelerator.device)
+    style_rare_2, _ = build_token_masks(tokenizer_two, [args.instance_prompt], 
+    rare_word = args.style_rare_word, super_word="", device=accelerator.device)
+    style_rare_mask = style_rare_1 | style_rare_2
+    style_token_ids = torch.where(style_rare_mask[0])[0].tolist()
+    assert len(style_token_ids) > 0, \
+      f"style_rare_word='{args.style_rare_word}' 未在 instance_prompt 中找到，检查 train.sh"
+
+
+    def _compute_to_k_no_hook(attn, enc, enc_c, enc_s):
+        """
+        等价于直接用 attn.to_k 调用forward 但是为了避免再调用一个 content LoRA 的 hook 所以这里改成直接计算
+        """
+        base = F.linear(enc, attn.to_k.weight, getattr(attn.to_k, "bias", None))
+        
+        lora = attn.to_k.lora_layer
+        if lora is None or not isinstance(lora, UnZipLoRALinearLayer):
+            return base
+        
+        dtype = lora.dtype
+        hs_c = enc_c if enc_c is not None else enc
+        hs_s = enc_s if enc_s is not None else hs_c
+        orig_dtype = hs_c.dtype
+
+        with torch.no_grad():
+            D_c = lora.lora_matrix_dic["content_down"].weight.T * lora.merge_content
+            U_c = lora.lora_matrix_dic["content_up"].weight.T
+            if lora.masked_matrix.get("content", False):
+                D_c = D_c * lora.mask_content
+            delta_c = hs_c.to(dtype) @ (D_c @ U_c)
+
+            if lora.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
+                delta_c = delta_c * UnZipLoRALinearLayer._active_mask_content.to(delta_c.dtype)
+        
+        D_s = lora.lora_matrix_dic["style_down"].weight.T * lora.merge_style
+        U_s = lora.lora_matrix_dic["style_up"].weight.T
+        if lora.masked_matrix.get("style", False):
+            D_s = D_s * lora.mask_style
+        delta_s = hs_s.to(dtype) @ (D_s @ U_s)
+
+        ft = lora.forward_type
+        if ft == 'content':
+            return base + delta_c.to(orig_dtype)
+        if ft == 'style':
+            return base + delta_s.to(orig_dtype)
+        # both
+        return base + delta_c.to(orig_dtype) + delta_s.to(orig_dtype)
+
+    def _make_style_attn_hook(style_token_ids):
+        style_ids = torch.tensor(sorted(set(style_token_ids)), device=accelerator.device)
+        def _hook(attn, args, kwargs, output):
+            if not ENABLE_STYLE_CAPTURE:
+                return 
+            
+            hidden_states = args[0] if len(args) > 0 else kwargs['hidden_states']
+            
+            enc = kwargs.get("encoder_hidden_states", None)
+            enc_c = kwargs.get("encoder_hidden_states_content", None)
+            enc_s = kwargs.get("encoder_hidden_states_style", None)
+
+            if enc is None:
+                return
+
+            with torch.no_grad():
+                if isinstance(attn.to_q.lora_layer, UnZipLoRALinearLayer):
+                    q = attn.to_q(hidden_states,
+                                hidden_states_1=hidden_states,
+                                hidden_states_2=hidden_states)
+                else:
+                    q = attn.to_q(hidden_states)
+
+            k = _compute_to_k_no_hook(attn, enc, enc_c, enc_s) 
+            
+            q = attn.head_to_batch_dim(q)
+            k = attn.head_to_batch_dim(k)
+
+            probs = attn.get_attention_scores(q, k, None)
+            s = probs[..., style_ids.to(probs.device)].sum(dim=-1)
+            lora_style_probs_capture.append(s)
         return _hook
 
     def _make_base_hook(kind: str):
@@ -2191,6 +2288,10 @@ def main(args):
                 continue
             kind = "k" if _layer is _mod.to_k else "v"
             _layer.lora_layer.register_forward_hook(_make_content_lora_hook(kind), with_kwargs=True)
+        
+        # 为 style lora 加入全局对齐
+        _mod.register_forward_hook(_make_style_attn_hook(style_token_ids),with_kwargs=True)
+        
         _mod.to_k.register_forward_hook(_make_base_hook("k"), with_kwargs=True)
     # -------------------------------------------------------------------------
         
@@ -2302,6 +2403,7 @@ def main(args):
                         _lst.clear()
                     for _lst in base_capture.values():
                         _lst.clear()
+                    lora_style_probs_capture.clear()
                     # ----------------------------------------------------
 
                     # print(noisy_model_input.shape, timesteps.shape, prompt_embeds_input.shape, unet_add_text_embeds.shape)
@@ -2383,10 +2485,18 @@ def main(args):
                     
                 
                 # -----------------------------------------------------------
+                """
+                # 这里基本上就是这两个大小
+                rare_mask.shape == super_mask.shape == non_rare_mask.shape = [B_mask, T] = [1, 77]
+                base_capture 中每个项的形状都是 (bsz, 77, d_layer)
+                lora_content_lora 中每个项的形状都是 (bsz, 77, d_layer)
+                """
+
                 lora_content_loss = None
                 # 插入 TAL 计算 和 non-rare token 上的增量
                 if args.focus and (lora_content_capture["k"] or lora_content_capture["v"]):
                     lora_content_loss_sum, n_terms = 0.0, 0
+                    #mask.shape: (1, 77, 1) 
                     mask = non_rare_mask.unsqueeze(-1)
 
                     for delta in itertools.chain(lora_content_capture["k"], lora_content_capture["v"]):
@@ -2397,6 +2507,7 @@ def main(args):
                         del delta_loss, delta
                     lora_content_loss = lora_content_loss_sum / n_terms
 
+                align_loss = None
                 # TAL 计算并类加到梯度中
                 if args.with_align_loss and base_capture["k"]:
                     align_sum, n_terms = 0.0, 0
@@ -2417,10 +2528,25 @@ def main(args):
                         align_loss = align_sum / n_terms
                         loss = loss + args.align_loss_weight * align_loss
                 
+               
+                gsa_loss = None
+                if args.with_gsa_loss and len(lora_style_probs_capture) > 0:
+                    gsa_sum, n_terms = 0.0, len(lora_style_probs_capture)
+                    
+                    for s in lora_style_probs_capture:
+                        p = s / (s.sum(dim=-1, keepdim=True) + 1e-8)
+                        gsa_sum = gsa_sum + p.var(dim=-1).mean()
+                    
+                    gsa_loss = gsa_sum / n_terms
+
+                    if n_terms > 0:
+                        loss = loss + args.gsa_loss_weight * gsa_loss
+               
                 for _lst in base_capture.values():
                     _lst.clear()
                 for _lst in lora_content_capture.values():
                     _lst.clear()
+                lora_style_probs_capture.clear()
                 # -----------------------------------------------------------
 
                 accelerator.backward(loss)
@@ -2546,6 +2672,8 @@ def main(args):
                 "loss": loss.detach().item(),
                 "reconstruction loss": reconstruction_loss.detach().item(),
                 "lora_content_loss": lora_content_loss.detach().item() if lora_content_loss is not None else 0.0, 
+                "align_loss": align_loss.detach().item() if align_loss is not None else 0.0,
+                "gsa_loss": gsa_loss.detach().item() if gsa_loss is not None else 0.0,
                 "lr": lr_scheduler.get_last_lr()[0]
             }
 
@@ -2601,10 +2729,12 @@ def main(args):
                     # 清空 lora_content_capture 和 base_capture 的捕获的输出
                     ENABLE_LORA_CAPTURE = False
                     ENABLE_BASE_CAPTURE = False
+                    ENABLE_STYLE_CAPTURE = False
                     for _lst in lora_content_capture.values():
                         _lst.clear()
                     for _lst in base_capture.values():
-                        _lst.clear()                    
+                        _lst.clear()
+                    lora_style_probs_capture.clear()                    
                     # ----------------------------------------------------
 
 
@@ -2662,7 +2792,9 @@ def main(args):
                         args.validation_prompt,
                         generate_heatmap=False,
                         tokenizer_one=tokenizer_one,
-                        tokenizer_two=tokenizer_two)
+                        tokenizer_two=tokenizer_two,
+                        heatmap_type='content'
+                    )
                     if len(heatmap_panels) > 0:
                         rare_heatmaps = [t[0] for t in heatmap_panels]
                         cls_heatmaps = [t[1] for t in heatmap_panels]
@@ -2685,7 +2817,8 @@ def main(args):
                             args.validation_prompt_content,
                             generate_heatmap=False,
                             tokenizer_one=tokenizer_one,
-                            tokenizer_two=tokenizer_two
+                            tokenizer_two=tokenizer_two,
+                            heatmap_type='content'
                         )
                         if len(heatmap_panels) > 0:
                             rare_heatmaps = [t[0] for t in heatmap_panels]
@@ -2703,7 +2836,11 @@ def main(args):
                     # 只生成 style 图片
                     if args.validation_prompt_style is not None:
                         unziplora_set_forward_type(unet, type="style")
-                        images, _, _ = log_validation(pipeline, args, accelerator, args.validation_prompt_style, args.validation_prompt_style, validation_prompt_style=args.validation_prompt_style)
+                        images, _, _ = log_validation(pipeline, args, accelerator, 
+                        args.validation_prompt_style, 
+                        args.validation_prompt_style, 
+                        validation_prompt_style=args.validation_prompt_style
+                        )
                         logged_images.append(concatenate_horizontal_img(images))
                         saved_images += images
                         unziplora_set_forward_type(unet, type="both")
@@ -2726,10 +2863,12 @@ def main(args):
                     # 验证完之后就重新开启捕获 content LoRA 和 base 的输出
                     ENABLE_LORA_CAPTURE = True
                     ENABLE_BASE_CAPTURE = True
+                    ENABLE_STYLE_CAPTURE = True
                     for _lst in lora_content_capture.values():
                         _lst.clear()
                     for _lst in base_capture.values():
                         _lst.clear()
+                    lora_style_probs_capture.clear()
                     # ----------------------------------------------------
                 
                 if args.with_saved_per_validation:
@@ -2862,9 +3001,10 @@ def main(args):
                 args.validation_prompt,
                 args.validation_prompt,
                 args.validation_prompt,
-                generate_heatmap=False,
+                generate_heatmap=True,
                 tokenizer_one=tokenizer_one,
-                tokenizer_two=tokenizer_two
+                tokenizer_two=tokenizer_two,
+                heatmap_type='content'
             )
             if len(heatmap_panels) > 0:
                 rare_heatmaps = [t[0] for t in heatmap_panels]
@@ -2895,9 +3035,10 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_content,
-                generate_heatmap=False,
+                generate_heatmap=True,
                 tokenizer_one=tokenizer_one,
-                tokenizer_two=tokenizer_two
+                tokenizer_two=tokenizer_two,
+                heatmap_type='content'
             )
             
             if len(heatmap_panels) > 0:
@@ -2928,7 +3069,22 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_style,
+                generate_heatmap=True,
+                tokenizer_one=tokenizer_one,
+                tokenizer_two=tokenizer_two,
+                heatmap_type='style'
             )
+            
+            if len(heatmap_panels) > 0:
+                rare_heatmaps = [t[0] for t in heatmap_panels]
+                cls_heatmaps = [t[1] for t in heatmap_panels]
+            else:
+                rare_heatmaps, cls_heatmaps = [], []
+
+            if len(rare_heatmaps) > 0:
+                logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+                logged_images.append(concatenate_horizontal_img(cls_heatmaps))
+            
             logged_images.append(concatenate_horizontal_img(images))
             saved_images += images
         
