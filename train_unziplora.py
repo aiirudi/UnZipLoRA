@@ -896,8 +896,6 @@ def parse_args(input_args=None):
     """
     parser.add_argument("--style_rare_word",type=str,default="",help="The class word to be used for cross attention regularization.",
     ) 
-    parser.add_argument("--super_word",type=str,default="",help="The class word to be used for cross attention regularization.",
-    ) 
     """
 
     parser.add_argument("--with_content_heatmap", action="store_true",help="Log content-only token heatmap during content validation.")
@@ -2045,8 +2043,8 @@ def main(args):
                 rare1, cls1 = build_token_masks(tokenizer_one, [validation_prompt], args.content_rare_word, args.class_word, accelerator.device)
                 rare2, cls2 = build_token_masks(tokenizer_two, [validation_prompt], args.content_rare_word, args.class_word, accelerator.device)
             else:
-                rare1, cls1 = build_token_masks(tokenizer_one, [validation_prompt], args.content_rare_word, args.class_word, accelerator.device)
-                rare2, cls2 = build_token_masks(tokenizer_two, [validation_prompt], args.content_rare_word, args.class_word, accelerator.device)
+                rare1, cls1 = build_token_masks(tokenizer_one, [validation_prompt], args.style_rare_word, args.super_word, accelerator.device)
+                rare2, cls2 = build_token_masks(tokenizer_two, [validation_prompt], args.style_rare_word, args.super_word, accelerator.device)
 
             rare_ids = torch.where((rare1 | rare2)[0])[0].tolist()
             cls_ids = torch.where((cls1 | cls2)[0])[0].tolist()
@@ -2671,8 +2669,9 @@ def main(args):
                     else:
                         rare_heatmaps, cls_heatmaps = [], []
 
-                    logged_images.append(concatenate_horizontal_img(rare_heatmaps))
-                    logged_images.append(concatenate_horizontal_img(cls_heatmaps))
+                    if len(rare_heatmaps) > 0:
+                        logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+                        logged_images.append(concatenate_horizontal_img(cls_heatmaps))
                     logged_images.append(concatenate_horizontal_img(images))
                     saved_images += images
                    
@@ -2694,8 +2693,9 @@ def main(args):
                         else:
                             rare_heatmaps, cls_heatmaps = [], []
 
-                        logged_images.append(concatenate_horizontal_img(rare_heatmaps))
-                        logged_images.append(concatenate_horizontal_img(cls_heatmaps))
+                        if len(rare_heatmaps) > 0:
+                            logged_images.append(concatenate_horizontal_img(rare_heatmaps))
+                            logged_images.append(concatenate_horizontal_img(cls_heatmaps))
                         logged_images.append(concatenate_horizontal_img(images))
                         saved_images += images
                         unziplora_set_forward_type(unet, type="both")

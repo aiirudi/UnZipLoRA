@@ -25,28 +25,27 @@ export STEPS=600
 # Training prompt 
 
 # both prompt
-export PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} in anime style"
+export PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style"
 # content prompt 
 export CONTENT_FORWARD_PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD}" 
 # style prompt
-export STYLE_FORWARD_PROMPT="A ${CLASS_WORD} in anime style" 
+export STYLE_FORWARD_PROMPT="A ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style" 
 
 # For validation
 export VALID_CONTENT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table"
-export VALID_PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table in anime style"
-export VALID_STYLE="A ${CLASS_WORD} in anime style on a table"
+export VALID_PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table in ${STYLE_RARE_TOKEN} style"
+export VALID_STYLE="A ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style on a table"
 
 # for content validation
 export VALID_CONTENT_PROMPT="a photo of a ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table"
 
 # for style validation
-export VALID_STYLE_PROMPT="A dog in anime style"
+export VALID_STYLE_PROMPT="A ${SUPER_WORD} in ${STYLE_RARE_TOKEN} style"
 
 export WANDB_PROJECT="unziplora"
 
 # style 热力图的两个关键词
 #  --style_rare_word="${STYLE_RARE_TOKEN}" \
-#  --super_word="${SUPER_WORD}" \
 
 accelerate launch train_unziplora.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
@@ -81,6 +80,8 @@ accelerate launch train_unziplora.py \
   --entity="elysiaareudi-discord" \
   --content_rare_word="${CONTENT_RARE_TOKEN}" \
   --class_word="${CLASS_WORD}" \
+  --style_rare_word="${STYLE_RARE_TOKEN}" \
+  --super_word="${SUPER_WORD}"
   --heatmap_map_size=64 \
   --heatmap_alpha=0.45 \
   --heatmap_steps=100 \
