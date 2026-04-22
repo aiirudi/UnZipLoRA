@@ -2567,7 +2567,15 @@ def main(args):
                     
                     for s in lora_style_probs_capture:
                         p = s / (s.sum(dim=-1, keepdim=True) + 1e-8)
-                        gsa_sum = gsa_sum + p.var(dim=-1).mean()
+                        spatial_len = p.size(-1)
+                        uniform_target = torch.ones_like(p) / spatial_len
+
+                        kl_div = F.kl_div(
+                            p.log(),
+                            uniform_target,
+                            reduction="batchmean"
+                        )
+                        gsa_sum = gsa_sum + kl_div
                     
                     gsa_loss = gsa_sum / n_terms
 
