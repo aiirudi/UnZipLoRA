@@ -2182,10 +2182,10 @@ def main(args):
                 return 
             content_inp = args[0]
 
-            D = module.lora_matrix_dic["content_down"].weight.T * module.merge_content  * module.lora_lambda_layer["content"]                                           
-            U = module.lora_matrix_dic["content_up"].weight.T 
-            
-            D_base = module.base_lora_matrix_dic["content_down"].T * module.merge_content * module.base_lambda_layer["content"]
+            D = module.lora_matrix_dic["content_down"].weight.T * module.merge_content
+            U = module.lora_matrix_dic["content_up"].weight.T
+
+            D_base = module.base_lora_matrix_dic["content_down"].T * module.merge_content
             U_base = module.base_lora_matrix_dic["content_up"].T
 
             if module.masked_matrix["content"]:
@@ -2226,10 +2226,10 @@ def main(args):
         orig_dtype = hs_c.dtype
 
         with torch.no_grad():
-            D_c = lora.lora_matrix_dic["content_down"].weight.T * lora.merge_content * lora.lora_lambda_layer["content"]
+            D_c = lora.lora_matrix_dic["content_down"].weight.T * lora.merge_content
             U_c = lora.lora_matrix_dic["content_up"].weight.T
-            
-            D_c_base = lora.base_lora_matrix_dic["content_down"].T * lora.merge_content * lora.base_lambda_layer["content"]
+
+            D_c_base = lora.base_lora_matrix_dic["content_down"].T * lora.merge_content
             U_c_base = lora.base_lora_matrix_dic["content_up"].T
             if lora.masked_matrix.get("content", False):
                 D_c = D_c * lora.mask_content
@@ -2242,10 +2242,10 @@ def main(args):
             if lora.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
                 delta_c = delta_c * UnZipLoRALinearLayer._active_mask_content.to(delta_c.dtype)
         
-        D_s = lora.lora_matrix_dic["style_down"].weight.T * lora.merge_style * lora.lora_lambda_layer["style"]
+        D_s = lora.lora_matrix_dic["style_down"].weight.T * lora.merge_style
         U_s = lora.lora_matrix_dic["style_up"].weight.T
 
-        D_s_base = lora.base_lora_matrix_dic["style_down"].T * lora.merge_style * lora.base_lambda_layer["style"]
+        D_s_base = lora.base_lora_matrix_dic["style_down"].T * lora.merge_style
         U_s_base = lora.base_lora_matrix_dic["style_up"].T        
 
         if lora.masked_matrix.get("style", False):

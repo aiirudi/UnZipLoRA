@@ -17,11 +17,10 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora-加入tlora,svd初始化lora权重矩阵"
+export WANDB_NAME="unziplora-加入tlora,svd初始化lora权重矩阵.去掉lambda layer"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
 export OUTPUT_DIR="models/anime_cat/anime_cat"
-export STEPS=800
-
+export STEPS=600
 # Training prompt 
 
 # both prompt

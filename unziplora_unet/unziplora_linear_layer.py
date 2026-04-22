@@ -9,14 +9,14 @@ from typing import ClassVar,Optional
 class UnZipLoRALinearLayer(nn.Module):
     
     _active_mask_content: ClassVar[Optional[torch.Tensor]] = None # 全局mask, 为了对齐 class token 和 rare token
-
+    _active_mask_style: ClassVar[Optional[torch.Tensor]] = None # 全局mask, 为了对齐 class token 和 rare token
 
     def __init__(
         self,
-        in_features: int, 
+        in_features: int,
         out_features: int,
         rank: int = 64,
-        lora_matrix_key: List[str] = None, 
+        lora_matrix_key: List[str] = None,
         device: Optional[Union[torch.device, str]] = None,
         # dtype: Optional[torch.dtype] = torch.float32,
         dtype: Optional[torch.dtype] = None,
@@ -27,24 +27,15 @@ class UnZipLoRALinearLayer(nn.Module):
         super().__init__()
 
         self.use_mask = use_mask
-        self.device = device
-        self.rank = rank
-        self.dtype = dtype
 
         self.lora_matrix_dic = nn.ModuleDict() # 用于存储LoRA 的矩阵。每个key是一个矩阵的名称， value 则是存储的矩阵
         self.fixed_matrix = {} 
         self.lora_matrix_dic_norm = {} # 存储每个 LoRA 矩阵的范数
         # * If masked matrix => True: the column filter is used / not all columns are used
         
-        # --------------------------------------------------------------------------
-        # 用于实现 tlora 的矩阵初始化需要的东西
+        #-------------------------------------------------------------------------------------
         self.base_lora_matrix_dic = nn.ParameterDict()
-        
-        # 中间的两个 lambda_layer 可能删除好点
-        self.base_lambda_layer = nn.ParameterDict()
-
-        self.lora_lambda_layer = nn.ParameterDict()
-        # --------------------------------------------------------------------------
+        #-------------------------------------------------------------------------------------
 
         # 用于实现 block separation
         # *                 => False: the filter is not used => all coluns are used
@@ -53,16 +44,11 @@ class UnZipLoRALinearLayer(nn.Module):
         for key in lora_matrix_key: # 用于生成 content_LoRA 和 style_LoRA 的 down 和 up 矩阵
             self.lora_matrix_dic[f"{key}_down"] = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
             self.lora_matrix_dic[f"{key}_up"] = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
-            
-            # -----------------------------------------------------------------------------
-            # tlora 中加入的lambda layer 也就是 rank 维度的可学习向量
-            self.lora_lambda_layer[f'{key}'] = nn.Parameter(torch.ones(1, rank))
-
-            # 用 tlora 的方式来初始化
-            self._init_weight_with_svd(in_features, out_features, rank, key, sig_type)
-            # -----------------------------------------------------------------------------
-
             # setattr(self, f"merge_{key}", nn.Parameter(torch.ones((out_features,), device=device, dtype=dtype), requires_grad=True))
+
+            # 用 SVD 方式来初始化
+            self._init_weight_with_svd(in_features, out_features, rank, key, sig_type, device, dtype)
+
             self.lora_matrix_dic_norm[f"{key}_norm_down"] = torch.norm(self.lora_matrix_dic[f"{key}_down"].weight.detach(), dim=0, keepdim=True)
             self.lora_matrix_dic_norm[f"{key}_norm_up"] = torch.norm(self.lora_matrix_dic[f"{key}_up"].weight.detach(), dim=0, keepdim=True)
             # * Whether use column filter, initialized: do not use
@@ -87,49 +73,44 @@ class UnZipLoRALinearLayer(nn.Module):
         self.lora_matrix_key = lora_matrix_key
         self.out_features = out_features
         self.in_features = in_features
+        self.rank = rank
+        self.dtype = dtype
         self.forward_type = "both"
+        self.device = device
 
-
-    def _init_weight_with_svd(self, in_features, out_features, rank, key, sig_type='last'):
+    def _init_weight_with_svd(self, in_features, out_features, rank, key, sig_type, device, dtype):
+        """用随机矩阵SVD分解初始化LoRA权重"""
         base_m = torch.normal(
-            size=(in_features, out_features), mean=0, std=1 / self.rank, dtype=self.dtype, device=self.device
+            size=(in_features, out_features), mean=0, std=1 / rank, dtype=dtype, device=device
         )
         u, s, v = torch.linalg.svd(base_m)
 
         # u: (in_features, in_features), v: (out_features, out_features), s: (min(in, out),)
         # down weight需要: (rank, in_features), up weight需要: (rank, out_features)
         if sig_type == 'principal':
-            self.lora_matrix_dic[f'{key}_down'].weight.data = u[:, : self.rank].T.clone()  # (rank, in_features)
-            self.lora_matrix_dic[f'{key}_up'].weight.data = v[: self.rank, :].clone()  # (rank, out_features)
-            self.lora_lambda_layer[f'{key}'].data = s[None, : self.rank].clone()
+            self.lora_matrix_dic[f'{key}_down'].weight.data = u[ : rank].clone()  # (rank, in_features)
+            self.lora_matrix_dic[f'{key}_up'].weight.data = v[:, : rank].clone()  # (rank, out_features)
         elif sig_type == 'last':
-            self.lora_matrix_dic[f'{key}_down'].weight.data = u[:, -self.rank:].T.clone()
-            self.lora_matrix_dic[f'{key}_up'].weight.data = v[-self.rank:, :].clone()
-            self.lora_lambda_layer[f'{key}'].data = s[None, -self.rank : ].clone()
+            self.lora_matrix_dic[f'{key}_down'].weight.data = u[-rank:].clone()  # (rank, in_features)
+            self.lora_matrix_dic[f'{key}_up'].weight.data = v[:, -rank:].clone()  # (rank, out_features)
         elif sig_type == 'middle':
-            start = math.ceil((u.shape[1] - self.rank) / 2)
-            self.lora_matrix_dic[f'{key}_down'].weight.data = u[:, start:start + self.rank].T.clone()
-            start = math.ceil((v.shape[0] - self.rank) / 2)
-            self.lora_matrix_dic[f'{key}_up'].weight.data = v[start: start  + self.rank, :].clone()
-            start = math.ceil((s.shape[0] - self.rank) / 2)
-            self.lora_lambda_layer[f'{key}'].data = s[None, start: start + self.rank].clone()
+            start = math.ceil((u.shape[1] - rank) / 2)
+            self.lora_matrix_dic[f'{key}_down'].weight.data = u[start:start + rank].clone()  # (rank, in_features)
+            start = math.ceil((v.shape[0] - rank) / 2)
+            self.lora_matrix_dic[f'{key}_up'].weight.data = v[:, start:start + rank].clone()  # (rank, out_features)
 
         del u, s, v, base_m
 
+        # 保存初始化的base权重，不需要梯度
         self.base_lora_matrix_dic[f"{key}_down"] = nn.Parameter(
             self.lora_matrix_dic[f"{key}_down"].weight.detach().clone(), requires_grad=False
         )
         self.base_lora_matrix_dic[f"{key}_up"] = nn.Parameter(
             self.lora_matrix_dic[f"{key}_up"].weight.detach().clone(), requires_grad=False
         )
-        self.base_lambda_layer[key] = nn.Parameter(
-            self.lora_lambda_layer[key].detach().clone(), requires_grad=False
-        )
 
         for param in self.parameters():
             param.data = param.data.contiguous()
-        
-
 
     @classmethod
     def set_content_mask(cls, mask: Optional[torch.Tensor]) -> None:
@@ -164,18 +145,6 @@ class UnZipLoRALinearLayer(nn.Module):
     def get_merger_mask(self, key):
         merge_matrix = getattr(self, f"merge_{key}")
         return merge_matrix
-    
-    def get_base_lora_weight(self, key):
-        merge_matrix = getattr(self, f"merge_{key}")
-        base_lam = self.base_lambda_layer[key].view(-1)
-        scale = (merge_matrix * base_lam).unsqueeze(1) 
-
-        if self.masked_matrix[key] is False:
-            return self.base_lora_matrix_dic[f"{key}_down"] * scale, self.base_lora_matrix_dic[f"{key}_up"]
-        else:
-            filter_matrix = getattr(self,f"mask_{key}").to(scale.dtype).unsqueeze(1)
-            return self.base_lora_matrix_dic[f"{key}_down"] * scale * filter_matrix, self.base_lora_matrix_dic[f"{key}_up"]
-
             
     def set_layer_mask(self, key, value=True):
         self.masked_matrix[key] = value
@@ -211,16 +180,25 @@ class UnZipLoRALinearLayer(nn.Module):
         # print(self.lora_matrix_dic.keys())
         # * Get weight without filter
         merge_matrix = getattr(self, f"merge_{key}")
-        lam = self.lora_lambda_layer[key].view(-1)
-        scale = (merge_matrix * lam).unsqueeze(1)
         if self.masked_matrix[key] is False:
             # merge_matrix = (torch.tanh(merge_matrix) + 1) / 2#* merge_matrix  
             # return self.lora_matrix_dic[f"{key}_down"].weight.data, self.lora_matrix_dic[f"{key}_up"].weight.data
-            return self.lora_matrix_dic[f"{key}_down"].weight.data * scale, self.lora_matrix_dic[f"{key}_up"].weight.data
+            return self.lora_matrix_dic[f"{key}_down"].weight.data * merge_matrix.unsqueeze(1), self.lora_matrix_dic[f"{key}_up"].weight.data
         else:
             # 这里 unsqueeze(1) 是因为这里是逐元素相乘
-            filter_matrix = getattr(self, f"mask_{key}").to(scale.dtype).unsqueeze(1)
-            return self.lora_matrix_dic[f"{key}_down"].weight.data * scale * filter_matrix, self.lora_matrix_dic[f"{key}_up"].weight.data 
+            filter_matrix = getattr(self, f"mask_{key}")
+            return self.lora_matrix_dic[f"{key}_down"].weight.data * filter_matrix.unsqueeze(1), self.lora_matrix_dic[f"{key}_up"].weight.data
+
+    def get_base_lora_weight(self, key):
+        merge_matrix = getattr(self, f"merge_{key}")
+        if self.masked_matrix[key] is False:
+            # merge_matrix = (torch.tanh(merge_matrix) + 1) / 2#* merge_matrix
+            # return self.lora_matrix_dic[f"{key}_down"].weight.data, self.lora_matrix_dic[f"{key}_up"].weight.data
+            return self.base_lora_matrix_dic[f"{key}_down"].data * merge_matrix.unsqueeze(1), self.base_lora_matrix_dic[f"{key}_up"].data
+        else:
+            # 这里 unsqueeze(1) 是因为这里是逐元素相乘
+            filter_matrix = getattr(self, f"mask_{key}")
+            return self.base_lora_matrix_dic[f"{key}_down"].data * filter_matrix.unsqueeze(1), self.base_lora_matrix_dic[f"{key}_up"].data
 
 
     def _scaled_dot_product_cross_attention(self, q, k, v, return_rank_vec=True):
@@ -267,45 +245,18 @@ class UnZipLoRALinearLayer(nn.Module):
 
 
         if merger_gradient is None:
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None and self.lora_lambda_layer[f'{key}'].grad is None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data #修改成加入 tlora 初始化的计算
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
-
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T  * merge_matrix.view(1, -1)
+                U = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
                 # 修改后改用 cross attention 进行计算
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
-                attn_cone = attn_cone_dL_dU
-            elif self.lora_matrix_dic[f"{key}_down"].weight.grad is not None and self.lora_lambda_layer[f'{key}'].grad is None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
-
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
-
-                # 修改后改用 cross_attntion 进行计算
                 attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
-                
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU  
-            elif self.lora_matrix_dic[f"{key}_down"].weight.grad is None and self.lora_lambda_layer[f'{key}'].grad is not None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
-
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].grad.data 
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
-
-                # 修改后改用 cross_attntion 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
-                
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU  
+                attn_cone = attn_cone_dL_dD
             else:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
+                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data + self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].grad.data
-
+                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
                 # 修改后改用 cross_attntion 进行计算
@@ -314,11 +265,11 @@ class UnZipLoRALinearLayer(nn.Module):
                 
                 attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
         else:
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None and self.lora_lambda_layer[f'{key}'].grad is None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
+            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
                 
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
+                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
                 # 修改后用cross-attention 进行计算
@@ -326,38 +277,14 @@ class UnZipLoRALinearLayer(nn.Module):
                 attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
                 attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
-            elif self.lora_matrix_dic[f"{key}_down"].weight.grad is None and self.lora_lambda_layer[f'{key}'].grad is not None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
-                
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1) * self.lora_lambda_layer[f'{key}'].data + self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].grad.data
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                # 修改后用cross-attention 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
-                
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
-            elif self.lora_matrix_dic[f"{key}_down"].weight.grad is not None and self.lora_lambda_layer[f'{key}'].grad is None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
-                
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1) * self.lora_lambda_layer[f'{key}'].data + self.lora_matrix_dic[f"{key}_down"].weight.grad.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
-
-                # 修改后用cross-attention 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
-                
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU                
             else:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
+                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
                 U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
                 
-                dD_dB = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                dD_dmerge = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1) * self.lora_lambda_layer[f'{key}'].data
-                dD_dlambda_layer = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1) * self.lora_lambda_layer[f'{key}'].grad.data
-                dL_dD = dD_dB + dD_dmerge + dD_dlambda_layer
+                dD_dB = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
+                dD_dmerge = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
+                dL_dD = dD_dB + dD_dmerge
                 dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
                 # 修改后用cross-attention 进行计算
@@ -367,7 +294,7 @@ class UnZipLoRALinearLayer(nn.Module):
                 attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
 
     
-        D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * self.lora_lambda_layer[f"{key}"].data
+        D = self.lora_matrix_dic[f"{key}_down"].weight.data.T
         U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
         # cone.shape (rank,)
@@ -502,22 +429,16 @@ class UnZipLoRALinearLayer(nn.Module):
 
 
             # 对 content_lora_weight 使用 软mask
-            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * self.lora_lambda_layer['content']
+            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content
             U_content = self.lora_matrix_dic["content_up"].weight.T 
             
-            D_content_base = self.base_lora_matrix_dic['content_down'].T * self.merge_content * self.base_lambda_layer['content']
-            U_content_base = self.base_lora_matrix_dic['content_up'].T
-
             # 如果硬 mask 开启，则再乘上 硬mask
             if self.masked_matrix["content"] is True:
                 D_content *= self.mask_content
-                D_content_base *= self.mask_content
             masked_content_weight = D_content @ U_content
-            base_content_weight = D_content_base @ U_content_base
-            content_weight = masked_content_weight - base_content_weight
 
             # 输入乘以最终权重 content_text_prompt_hidden_states (B, seq, in) @ masked_content_weight : (in, out) -> up_hidden_states_content (B, seq, outs)
-            up_hidden_states_content = hidden_states_content.to(dtype) @ content_weight
+            up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
             
 
             # ------------------------------------------------------------
@@ -528,41 +449,28 @@ class UnZipLoRALinearLayer(nn.Module):
 
 
             # 和上段同理，这里就是变成了对 style_lora_weight操作而已
-            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * self.lora_lambda_layer['style']
+            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style
             U_style = self.lora_matrix_dic["style_up"].weight.T 
-
-            D_style_base = self.base_lora_matrix_dic['style_down'].T * self.merge_style * self.base_lambda_layer['style']
-            U_style_base = self.base_lora_matrix_dic['style_up'].T
             
             if self.masked_matrix["style"] is True: 
                 D_style *= self.mask_style
-                D_style_base *= self.mask_style
             masked_style_weight = D_style @ U_style
-            base_style_weight = D_style_base @ U_style_base
-            style_weight = masked_style_weight - base_style_weight            
         
             # 这里也是输入乘以最终权重，只不过变成了是在计算 style 的而已
-            up_hidden_states_style = hidden_states_style.to(dtype) @ style_weight
+            up_hidden_states_style = hidden_states_style.to(dtype) @ masked_style_weight
             added_hidden_states = up_hidden_states_style.to(orig_dtype) + up_hidden_states_content.to(orig_dtype)
         
         # 如果 forward_type 是 "content"，那么就只计算经过 content 的 值 
         if self.forward_type == "content":
             orig_dtype = hidden_states_content.dtype
 
-            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * self.lora_lambda_layer['content']
+            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content
             U_content = self.lora_matrix_dic["content_up"].weight.T
-
-            D_content_base = self.base_lora_matrix_dic['content_down'].T * self.merge_content * self.base_lambda_layer['content']
-            U_content_base = self.base_lora_matrix_dic['content_up'].T
 
             if self.masked_matrix["content"] is True:
                 D_content = D_content * self.mask_content
-                D_content_base *= self.mask_content
             merged_content_weight = D_content @ U_content
-            base_content_weight = D_content_base @ U_content_base
-
-            content_weight = merged_content_weight - base_content_weight
-            up_hidden_states_content = hidden_states_content.to(dtype) @ content_weight
+            up_hidden_states_content = hidden_states_content.to(dtype) @ merged_content_weight
             
             # ------------------------------------------------------------
             # 启用 TFM 的 mask (仅在 cross-attention 的 to_k / to_v 上, seq_len=77 时应用)
@@ -576,20 +484,13 @@ class UnZipLoRALinearLayer(nn.Module):
         if self.forward_type == "style":
             orig_dtype = hidden_states_style.dtype
 
-            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * self.lora_lambda_layer['style']
+            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style
             U_style = self.lora_matrix_dic["style_up"].weight.T
-
-            D_style_base = self.base_lora_matrix_dic['style_down'].T * self.merge_style * self.base_lambda_layer['style']
-            U_style_base = self.base_lora_matrix_dic['style_up'].T
 
             if self.masked_matrix["style"] is True:
                 D_style = D_style * self.mask_style
-                D_style_base = D_style_base * self.mask_style
             merged_style_weight = D_style @ U_style
-            base_style_weight = D_style_base @ U_style_base
-            style_weight = merged_style_weight - base_style_weight
-
-            up_hidden_states_style = hidden_states_style.to(dtype) @ style_weight
+            up_hidden_states_style = hidden_states_style.to(dtype) @ merged_style_weight
             added_hidden_states = up_hidden_states_style.to(orig_dtype)
         return added_hidden_states
     
@@ -608,7 +509,8 @@ class UnZipLoRALinearLayerInfer(nn.Module):
         
         # y用于控制 block separation
         self.masked_matrix = {}
-                
+        
+        
         for key in lora_matrix_key:
             self.lora_matrix_dic[f"{key}_down"] = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
             self.lora_matrix_dic[f"{key}_up"] = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
