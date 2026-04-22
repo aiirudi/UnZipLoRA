@@ -918,6 +918,10 @@ def parse_args(input_args=None):
     # GSA loss 参数
     parser.add_argument("--with_gsa_loss", type=str2bool, default='false', help='启用 gsa 损失。')
     parser.add_argument("--gsa_loss_weight", type=float, default=1.0, help='gsa 损失权重。')
+
+    # 随机矩阵svd分解初始化
+    parser.add_argument("--sig_type",type=str,default="last",help="随机矩阵svd分解初始化方式",
+    ) 
     
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1433,6 +1437,7 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
+                sig_type=args.sig_type
             )
         )
         attn_module.to_k.set_lora_layer(
@@ -1445,6 +1450,7 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
+                sig_type=args.sig_type
             )
         )
         attn_module.to_v.set_lora_layer(
@@ -1457,6 +1463,7 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
+                sig_type=args.sig_type
             )
         )
         attn_module.to_out[0].set_lora_layer(
@@ -1469,6 +1476,7 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
+                sig_type=args.sig_type
             )
         )
 
@@ -1534,8 +1542,8 @@ def main(args):
 
             for model in models:
                 if isinstance(model, type(accelerator.unwrap_model(unet))):
-                    unet_lora_layers_to_save_content, unet_lora_layers_merger_content = unet_inverse_ziplora_state_dict(model, key="content")
-                    unet_lora_layers_to_save_style, unet_lora_layers_merger_style = unet_inverse_ziplora_state_dict(model, key="style")
+                    unet_lora_layers_to_save_content, unet_lora_layers_merger_content, unet_lora_layers_base_weight_content = unet_inverse_ziplora_state_dict(model, key="content")
+                    unet_lora_layers_to_save_style, unet_lora_layers_merger_style, unet_lora_layers_base_weight_style = unet_inverse_ziplora_state_dict(model, key="style")
                 elif isinstance(
                     model, type(accelerator.unwrap_model(text_encoder_one))
                 ):
@@ -2174,11 +2182,20 @@ def main(args):
                 return 
             content_inp = args[0]
 
-            D = module.lora_matrix_dic["content_down"].weight.T * module.merge_content                                           
+            D = module.lora_matrix_dic["content_down"].weight.T * module.merge_content  * module.lora_lambda_layer["content"]                                           
             U = module.lora_matrix_dic["content_up"].weight.T 
+            
+            D_base = module.base_lora_matrix_dic["content_down"].T * module.merge_content * module.base_lambda_layer["content"]
+            U_base = module.base_lora_matrix_dic["content_up"].T
+
             if module.masked_matrix["content"]:
                 D = D *  module.mask_content
-            content_out = content_inp @ (D @ U)
+                D_base = D_base * module.mask_content
+            
+            weight_content = D @ U
+            base_weight_content = D_base @ U_base
+
+            content_out = content_inp @ (weight_content - base_weight_content)
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
         return _hook
 
@@ -2209,20 +2226,35 @@ def main(args):
         orig_dtype = hs_c.dtype
 
         with torch.no_grad():
-            D_c = lora.lora_matrix_dic["content_down"].weight.T * lora.merge_content
+            D_c = lora.lora_matrix_dic["content_down"].weight.T * lora.merge_content * lora.lora_lambda_layer["content"]
             U_c = lora.lora_matrix_dic["content_up"].weight.T
+            
+            D_c_base = lora.base_lora_matrix_dic["content_down"].T * lora.merge_content * lora.base_lambda_layer["content"]
+            U_c_base = lora.base_lora_matrix_dic["content_up"].T
             if lora.masked_matrix.get("content", False):
                 D_c = D_c * lora.mask_content
-            delta_c = hs_c.to(dtype) @ (D_c @ U_c)
+                D_c_base = D_c_base * lora.mask_content
+            weight_content = D_c @ U_c
+            base_weight_content = D_c_base @ U_c_base
+
+            delta_c = hs_c.to(dtype) @ (weight_content - base_weight_content)
 
             if lora.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
                 delta_c = delta_c * UnZipLoRALinearLayer._active_mask_content.to(delta_c.dtype)
         
-        D_s = lora.lora_matrix_dic["style_down"].weight.T * lora.merge_style
+        D_s = lora.lora_matrix_dic["style_down"].weight.T * lora.merge_style * lora.lora_lambda_layer["style"]
         U_s = lora.lora_matrix_dic["style_up"].weight.T
+
+        D_s_base = lora.base_lora_matrix_dic["style_down"].T * lora.merge_style * lora.base_lambda_layer["style"]
+        U_s_base = lora.base_lora_matrix_dic["style_up"].T        
+
         if lora.masked_matrix.get("style", False):
             D_s = D_s * lora.mask_style
-        delta_s = hs_s.to(dtype) @ (D_s @ U_s)
+            D_s_base = D_s_base * lora.mask_style
+        weight_style = D_s @ U_s
+        base_weight_style = D_s_base @ U_s_base
+
+        delta_s = hs_s.to(dtype) @ (weight_style - base_weight_style)
 
         ft = lora.forward_type
         if ft == 'content':
@@ -2874,8 +2906,8 @@ def main(args):
                 if args.with_saved_per_validation:
                     unet = accelerator.unwrap_model(unet)
                     unet = unet.to(torch.float32)
-                    unet_lora_layers_content, unet_lora_layers_merger_content = unet_inverse_ziplora_state_dict(unet, key="content")
-                    unet_lora_layers_style, unet_lora_layers_merger_style = unet_inverse_ziplora_state_dict(unet, key="style")
+                    unet_lora_layers_content, unet_lora_layers_merger_content, unet_lora_layers_base_weight_content  = unet_inverse_ziplora_state_dict(unet, key="content")
+                    unet_lora_layers_style, unet_lora_layers_merger_style, unet_lora_layers_base_weight_style = unet_inverse_ziplora_state_dict(unet, key="style")
 
                     if args.train_text_encoder:
                         text_encoder_one = accelerator.unwrap_model(text_encoder_one)
@@ -2891,6 +2923,7 @@ def main(args):
                         text_encoder_2_lora_layers = None
                     
                     torch.save(unet_lora_layers_merger_content, f"{args.output_dir}_{global_step}_merger_content.pth")
+                    torch.save(unet_lora_layers_base_weight_content, f"{args.output_dir}_{global_step}_base_weight_content.pth")
                     StableDiffusionXLPipeline.save_lora_weights(
                         save_directory=f"{args.output_dir}_{global_step}_content",
                         unet_lora_layers=unet_lora_layers_content,
@@ -2898,6 +2931,7 @@ def main(args):
                         text_encoder_2_lora_layers=text_encoder_2_lora_layers,
                     )
                     torch.save(unet_lora_layers_merger_style, f"{args.output_dir}_{global_step}_merger_style.pth")
+                    torch.save(unet_lora_layers_base_weight_style, f"{args.output_dir}_{global_step}_base_weight_style.pth")
                     StableDiffusionXLPipeline.save_lora_weights(
                         save_directory=f"{args.output_dir}_{global_step}_style",
                         unet_lora_layers=unet_lora_layers_style,
@@ -2922,8 +2956,8 @@ def main(args):
         # 打包模型
         unet = accelerator.unwrap_model(unet)
         unet = unet.to(torch.float32)
-        unet_lora_layers_content, unet_lora_layers_merger_content = unet_inverse_ziplora_state_dict(unet, key="content")
-        unet_lora_layers_style, unet_lora_layers_merger_style = unet_inverse_ziplora_state_dict(unet, key="style")
+        unet_lora_layers_content, unet_lora_layers_merger_content, unet_lora_layers_base_weight_content = unet_inverse_ziplora_state_dict(unet, key="content")
+        unet_lora_layers_style, unet_lora_layers_merger_style, unet_lora_layers_base_weight_style = unet_inverse_ziplora_state_dict(unet, key="style")
 
         if args.train_text_encoder:
             text_encoder_one = accelerator.unwrap_model(text_encoder_one)
@@ -2947,6 +2981,8 @@ def main(args):
         )
         # 保存 content_merge 向量
         torch.save(unet_lora_layers_merger_content, f"{args.output_dir}_merger_content.pth")
+        # 保存 base weight content 矩阵
+        torch.save(unet_lora_layers_base_weight_content, f"{args.output_dir}_base_weight_content.pth")
         
         # 保存 style_lora_layer
         StableDiffusionXLPipeline.save_lora_weights(
@@ -2957,6 +2993,8 @@ def main(args):
         )
         # 保存 style_merge 向量
         torch.save(unet_lora_layers_merger_style, f"{args.output_dir}_merger_style.pth")
+        # 保存 base weight style 矩阵
+        torch.save(unet_lora_layers_base_weight_style, f"{args.output_dir}_base_weight_style.pth")
         
         # remove unuse models for save GPU memory
         unet = unet.cpu()
@@ -3001,7 +3039,7 @@ def main(args):
                 args.validation_prompt,
                 args.validation_prompt,
                 args.validation_prompt,
-                generate_heatmap=True,
+                generate_heatmap=False,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='content'
@@ -3035,7 +3073,7 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_content,
-                generate_heatmap=True,
+                generate_heatmap=False,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='content'
@@ -3069,7 +3107,7 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_style,
-                generate_heatmap=True,
+                generate_heatmap=False,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='style'

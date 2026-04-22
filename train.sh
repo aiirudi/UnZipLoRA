@@ -17,10 +17,10 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora-加入gsa后热力图"
+export WANDB_NAME="unziplora-加入tlora,svd初始化lora权重矩阵"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
 export OUTPUT_DIR="models/anime_cat/anime_cat"
-export STEPS=600
+export STEPS=800
 
 # Training prompt 
 
@@ -86,4 +86,5 @@ accelerate launch train_unziplora.py \
   --with_align_loss="true" \
   --align_loss_weight=1.0 \
   --with_gsa_loss="true" \
-  --gsa_loss_weight=1.0
+  --gsa_loss_weight=1.0 \
+  --sig_type="last"

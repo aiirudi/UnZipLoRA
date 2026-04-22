@@ -306,6 +306,7 @@ def unet_inverse_ziplora_state_dict(
     """
     lora_state_dict = {}
     mask_state_dict = {}
+    base_state_dict = {}
     for name, module in unet.named_modules():
         if hasattr(module, "set_lora_layer"):
             lora_layer = getattr(module, "lora_layer")
@@ -316,9 +317,13 @@ def unet_inverse_ziplora_state_dict(
                 lora_state_dict[f"unet.{name}.lora.down.weight"] = weight_down.contiguous()
                 merge_matrix = lora_layer.get_merger_mask(key)
                 mask_state_dict[f"unet.{name}.lora.merge_{key}"] = merge_matrix.contiguous()
+                
+                base_weight_down, base_weight_up = lora_layer.get_base_lora_weight(key)
+                base_state_dict[f'unet.{name}.lora.up.base_{key}'] = base_weight_up.contiguous()
+                base_state_dict[f'unet.{name}.lora.down.base_{key}'] = base_weight_down.contiguous()
                 if quick_release:
                     lora_layer.cpu()
-    return lora_state_dict, mask_state_dict
+    return lora_state_dict, mask_state_dict, base_state_dict
 
 
 def initialize_unziplora_layer_for_inference(state_dict_content_down, state_dict_content_up, \
