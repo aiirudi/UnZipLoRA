@@ -2567,15 +2567,13 @@ def main(args):
                     
                     for s in lora_style_probs_capture:
                         p = s / (s.sum(dim=-1, keepdim=True) + 1e-8)
-                        spatial_len = p.size(-1)
-                        uniform_target = torch.ones_like(p) / spatial_len
+                        
+                        entropy = - (p * (p + 1e-8).log()).sum(dim=-1).mean()
 
-                        kl_div = F.kl_div(
-                            p.log(),
-                            uniform_target,
-                            reduction="batchmean"
-                        )
-                        gsa_sum = gsa_sum + kl_div
+                        spatial_len = p.size(-1)
+                        max_entropy = torch.log(torch.tensor(spatial_len, dtype=p.dtype, device=p.device))
+
+                        gsa_sum = gsa_sum + (max_entropy - entropy)
                     
                     gsa_loss = gsa_sum / n_terms
 
