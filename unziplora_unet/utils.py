@@ -509,6 +509,11 @@ def load_pipeline_from_sdxl(MODEL_ID,
     noise_scheduler: DDPMScheduler=None,
     text_encoder_one: CLIPTextModel=None, 
     text_encoder_two: CLIPTextModelWithProjection=None, 
+    max_rank=64,
+    min_rank_content=32,
+    min_rank_style=24,
+    alpha=1.0,
+    timestep_mode="priecewise"
     ):
     """
     log UnZipLoRA sdxl pipeline, enabling use
@@ -559,6 +564,11 @@ def load_pipeline_from_sdxl(MODEL_ID,
         tokenizer_2=tokenizer_two,
         unet=unet,
         scheduler=noise_scheduler,
+        max_rank=max_rank,
+        min_rank_content=min_rank_content,
+        min_rank_style=min_rank_style,
+        alpha=alpha,
+        timestep_mode=timestep_mode
     )
     return pipeline
 
@@ -956,5 +966,69 @@ def concat_triplet(a, b, c):
     canvas.paste(b, (w, 0))
     canvas.paste(c, (w * 2, 0))
     return canvas
-# ---------------------------生成热力图的函数和工具类---------------------------
+# ---------------------------生成热力图的函数和工具类--------------------------------
 
+# ---------------------------加入非对称时间步控制策略--------------------------------d
+def get_mask_by_timestep(
+        timestep, 
+        max_timestep, 
+        max_rank, min_rank=1, 
+        alpha=1.0, branch="content", mode="priecewise"):
+    
+    if torch.is_tensor(timestep):
+        t = float(timestep.item())
+        device = timestep.device
+        dtype = timestep.dtype
+    else:
+        t = float(timestep)
+        device = None
+        dtype = torch.float32
+    
+    x = t / max_timestep
+
+    if mode == "priecewise":
+        if branch == "content":
+            if x >= 0.8:
+                rho = 0.5
+            elif x >= 0.5:
+                rho = 1.0
+            else:
+                rho = 0.3
+        elif branch == "style":
+            if x >= 0.8:
+                rho = 0.1
+            elif x >= 0.5:
+                rho = 0.5
+            else:
+                rho = 1.0
+        else:
+            raise NotImplementedError("get_mask_by_timestep 函数的branch参数一定要在 [content, style]之中")
+
+    elif mode == "linear":
+        if branch == "content":
+            if x >= 0.8:
+                rho = 0.5
+            elif x >= 0.5:
+                rho = 1.0 - ((x - 0.5) / 0.3 * 0.5) ** alpha
+            else:
+                rho = 0.3 + (x / 0.5 * 0.7) ** alpha
+        elif branch == "style":
+            if x >= 0.8:
+                rho = 0.1
+            elif x >= 0.5:
+                rho = 0.5 - ((x - 0.5) / 0.3 * 0.4) ** alpha
+            else:
+                rho = 1.0 - x ** alpha
+        else:
+            raise NotImplementedError("get_mask_by_timestep 函数的branch参数一定要在 [content, style]之中")        
+    else:
+        raise NotImplementedError("get_mask_by_timestep 函数的mode参数一定要在 [content, style]之中")
+
+    r = int(round(min_rank + rho * (max_rank - min_rank)))
+    r = max(min_rank, min(r, max_rank))
+
+    sigma_mask = torch.zeros((1, max_rank), device=device, dtype=dtype)
+    sigma_mask[:, :r]=1.0
+    return sigma_mask
+
+# ---------------------------加入非对称时间步控制策略--------------------------------

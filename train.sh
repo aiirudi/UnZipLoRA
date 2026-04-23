@@ -6,6 +6,7 @@ CLASS_WORD="cat"          # 例如：dog
 STYLE_RARE_TOKEN="anime"
 SUPER_WORD='dog'
 
+TIMESTEP_MODE='priecewise'
 
 # Hyper parameters
 export period_sample_epoch=4
@@ -17,7 +18,7 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora-加入svd初始化lora权重矩阵.gsa loss 采用最大熵"
+export WANDB_NAME="unziplora-改进tlora中的非对称时间步策略"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
 export OUTPUT_DIR="models/anime_cat/anime_cat"
 export STEPS=600
@@ -85,5 +86,9 @@ accelerate launch train_unziplora.py \
   --with_align_loss="true" \
   --align_loss_weight=1.0 \
   --with_gsa_loss="true" \
-  --gsa_loss_weight=1.0 \
-  --sig_type="last"
+  --gsa_loss_weight=2.0 \
+  --sig_type="last" \
+  --alpha=1.0 \
+  --min_rank_content=32 \
+  --min_rank_style=24 \
+  --timestep_mode="${TIMESTEP_MODE}"

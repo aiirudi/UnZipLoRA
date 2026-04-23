@@ -62,7 +62,7 @@ from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
 from unziplora_unet.unziplora_linear_layer import UnZipLoRALinearLayer
-from unziplora_unet.pipeline_stable_diffusion_xl import StableDiffusionXLUnZipLoRAPipeline
+from unziplora_unet.pipeline_stable_diffusion_xl import StableDiffusionXLUnZipLoRAPipeline, StableDiffusionXLSingleLoRAPipeline
 from unziplora_unet.unet_2d_condition import UNet2DConditionModel
 from unziplora_unet.utils import *
 
@@ -920,9 +920,14 @@ def parse_args(input_args=None):
     parser.add_argument("--gsa_loss_weight", type=float, default=1.0, help='gsa 损失权重。')
 
     # 随机矩阵svd分解初始化
-    parser.add_argument("--sig_type",type=str,default="last",help="随机矩阵svd分解初始化方式",
-    ) 
-    
+    parser.add_argument("--sig_type",type=str,default="last",help="随机矩阵svd分解初始化方式") 
+
+    # 加入content LoRA 和 style LoRA 的非对称时间步策略
+    parser.add_argument("--min_rank_content",type=int,default=32,help="content LoRA非堆成时间步的最小秩数") 
+    parser.add_argument("--min_rank_style",type=int,default=24,help="style LoRA非堆成时间步的最小秩数") 
+    parser.add_argument("--alpha", type=float, default=1.0, help='时间步系数控制参数')
+    parser.add_argument("--timestep_mode", type=str,choices=["priecewise", "linear"],default="priecewise", help='时间步系数计算模式')
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -2396,6 +2401,8 @@ def main(args):
                 noise = torch.randn_like(model_inputs["both"])
                 bsz = model_inputs["both"].shape[0]
                 # Sample a random timestep for each image
+                
+                # 在这里获取时间步
                 timesteps = torch.randint(
                     0,
                     noise_scheduler.config.num_train_timesteps,
@@ -2403,6 +2410,9 @@ def main(args):
                     device=model_input.device,
                 )
                 timesteps = timesteps.long()
+
+                sigma_mask_content = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_content, branch="content", mode="priecewise")
+                sigma_mask_style = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_style, branch="style", mode="priecewise")
 
                 # Add noise to the model input according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
@@ -2446,6 +2456,10 @@ def main(args):
                         prompt_embeds_content_forward_input,
                         prompt_embeds_style_forward_input,
                         added_cond_kwargs=unet_added_conditions,
+                        cross_attention_kwargs={
+                            "sigma_mask_content": sigma_mask_content.detach().to(prompt_embeds_input.device),
+                            "sigma_mask_style": sigma_mask_style.detach().to(prompt_embeds_input.device),
+                        },
                     ).sample
                 else:
                     raise NotImplementedError
@@ -3019,9 +3033,15 @@ def main(args):
             revision=args.revision,
             torch_dtype=weight_dtype,
         )
+
         pipeline = load_pipeline_from_sdxl(
             args.pretrained_model_name_or_path,
             vae=vae,
+            max_rank=args.rank,
+            min_rank_content=args.min_rank_content,
+            min_rank_style=args.min_rank_style,
+            alpha=1.0,
+            timestep_mode=args.timestep_mode,
         )
 
         # load attention processors
@@ -3065,13 +3085,18 @@ def main(args):
 
         # 只在有 content_prompt 下生成图片
         if args.validation_prompt_content and args.num_validation_images > 0:
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
+            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
                 vae=vae,
                 revision=args.revision,
                 torch_dtype=weight_dtype,
+                max_rank=args.rank,
+                min_rank=args.min_rank_content,
+                alpha=args.alpha,
+                branch="content",
+                timestep_mode=args.timestep_mode
             )
-            pipeline.load_lora_weights(f"{args.output_dir}_content")
+            pipeline.setup_lora_layers(f"{args.output_dir}_content", rank=args.rank)
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             images, image_list, heatmap_panels = log_validation(
@@ -3099,13 +3124,18 @@ def main(args):
         
         # 只在有 style_prompt 下生成图片
         if args.validation_prompt_style and args.num_validation_images > 0:
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
+            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
                 vae=vae,
                 revision=args.revision,
                 torch_dtype=weight_dtype,
+                max_rank=args.rank,
+                min_rank=args.min_rank_style,
+                alpha=args.alpha,
+                branch="style",
+                timestep_mode=args.timestep_mode
             )
-            pipeline.load_lora_weights(f"{args.output_dir}_style")
+            pipeline.setup_lora_layers(f"{args.output_dir}_style", rank=args.rank)
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             images, image_list, heatmap_panels = log_validation(

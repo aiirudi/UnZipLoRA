@@ -196,6 +196,8 @@ class AttnProcessor:
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         scale: float = 1.0,
+        sigma_mask_content=None,
+        sigma_mask_style=None, 
     ) -> torch.Tensor:
         residual = hidden_states
 
@@ -681,6 +683,8 @@ class AttnProcessor2_0:
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         scale: float = 1.0,
+        sigma_mask_content=None,
+        sigma_mask_style=None, 
     ) -> torch.FloatTensor:
         residual = hidden_states
         if attn.spatial_norm is not None:
@@ -706,7 +710,7 @@ class AttnProcessor2_0:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         args = () if USE_PEFT_BACKEND else (scale,)
-        query = attn.to_q(hidden_states, hidden_states_1=hidden_states, hidden_states_2=hidden_states, *args)
+        query = attn.to_q(hidden_states, *args, hidden_states_1=hidden_states, hidden_states_2=hidden_states,  sigma_mask_content=sigma_mask_content, sigma_mask_style=sigma_mask_style)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
@@ -718,11 +722,13 @@ class AttnProcessor2_0:
             encoder_hidden_states_style = attn.norm_encoder_hidden_states(encoder_hidden_states_style)
 
         key = attn.to_k(encoder_hidden_states, 
-                        hidden_states_1=encoder_hidden_states_content, 
-                        hidden_states_2=encoder_hidden_states_style, *args)
+                        *args, hidden_states_1=encoder_hidden_states_content, 
+                        hidden_states_2=encoder_hidden_states_style,  
+                        sigma_mask_content=sigma_mask_content, sigma_mask_style=sigma_mask_style)
         value = attn.to_v(encoder_hidden_states, 
-                          hidden_states_1=encoder_hidden_states_content, 
-                          hidden_states_2=encoder_hidden_states_style, *args)
+                          *args, hidden_states_1=encoder_hidden_states_content, 
+                          hidden_states_2=encoder_hidden_states_style, 
+                          sigma_mask_content=sigma_mask_content, sigma_mask_style=sigma_mask_style)
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -742,7 +748,7 @@ class AttnProcessor2_0:
         hidden_states = hidden_states.to(query.dtype)
 
         # linear proj
-        hidden_states = attn.to_out[0](hidden_states, hidden_states_1=hidden_states, hidden_states_2=hidden_states, *args)
+        hidden_states = attn.to_out[0](hidden_states, *args, hidden_states_1=hidden_states, hidden_states_2=hidden_states, sigma_mask_content=sigma_mask_content, sigma_mask_style=sigma_mask_style)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 

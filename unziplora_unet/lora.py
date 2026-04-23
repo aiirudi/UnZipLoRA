@@ -3,7 +3,7 @@ import torch
 from diffusers.models.lora import LoRACompatibleLinear, LoRALinearLayer
 from torch import nn 
 
-
+from typing import Union
 
 
 class LoRACompatibleLinear(nn.Linear):
@@ -66,7 +66,7 @@ class LoRACompatibleLinear(nn.Linear):
         self.w_up = None
         self.w_down = None
 
-    def forward(self, hidden_states: torch.Tensor, scale: float = 1.0, hidden_states_1: torch.Tensor = None, hidden_states_2: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, scale: float = 1.0, hidden_states_1: torch.Tensor = None, hidden_states_2: torch.Tensor = None,sigma_mask_content=None, sigma_mask_style=None) -> torch.Tensor:
         # * compute results with lora layers
         if self.lora_layer is None:
             out = super().forward(hidden_states)
@@ -74,5 +74,5 @@ class LoRACompatibleLinear(nn.Linear):
         else:
             out = super().forward(hidden_states)
                
-            lora_output = (scale * self.lora_layer(hidden_states_1, hidden_states_2))
+            lora_output = (scale * self.lora_layer(hidden_states_1, hidden_states_2, sigma_mask_content, sigma_mask_style))
             return out + lora_output
