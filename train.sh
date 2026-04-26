@@ -88,7 +88,9 @@ accelerate launch train_unziplora.py \
   --with_gsa_loss="true" \
   --gsa_loss_weight=2.0 \
   --sig_type="last" \
+  --use_base_weight="true" \
   --alpha=1.0 \
   --min_rank_content=32 \
   --min_rank_style=24 \
-  --timestep_mode="${TIMESTEP_MODE}"
+  --timestep_mode="${TIMESTEP_MODE}" \
+  --use_time_control="true"

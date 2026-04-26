@@ -22,11 +22,13 @@ class UnZipLoRALinearLayer(nn.Module):
         dtype: Optional[torch.dtype] = None,
         use_mask: bool = False,  # TFM 只在 cross-attention 的 to_k / to_v 上启用
         sig_type='last',
+        use_base_weight=True,
         **model_kwargs
     ):
         super().__init__()
 
         self.use_mask = use_mask
+        self.use_base_weight = use_base_weight # 用来设置是否要减去初始权重
 
         self.lora_matrix_dic = nn.ModuleDict() # 用于存储LoRA 的矩阵。每个key是一个矩阵的名称， value 则是存储的矩阵
         self.fixed_matrix = {} 
@@ -437,10 +439,21 @@ class UnZipLoRALinearLayer(nn.Module):
             D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * sigma_mask_content
             U_content = self.lora_matrix_dic["content_up"].weight.T 
             
+            
+            # 加入初始化权重矩阵
+            D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
+            U_content_base = self.base_lora_matrix_dic["content_up"].T
+
             # 如果硬 mask 开启，则再乘上 硬mask
             if self.masked_matrix["content"] is True:
                 D_content *= self.mask_content
-            masked_content_weight = D_content @ U_content
+                D_content_base *= self.mask_content
+            
+            if self.use_base_weight:
+                # 减去初始化矩阵的权重
+                masked_content_weight = (D_content @ U_content) - (D_content_base @ U_content_base)
+            else:
+                masked_content_weight = D_content @ U_content
 
             # 输入乘以最终权重 content_text_prompt_hidden_states (B, seq, in) @ masked_content_weight : (in, out) -> up_hidden_states_content (B, seq, outs)
             up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
@@ -457,9 +470,17 @@ class UnZipLoRALinearLayer(nn.Module):
             D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * sigma_mask_style
             U_style = self.lora_matrix_dic["style_up"].weight.T 
             
+            D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_content * sigma_mask_content
+            U_style_base = self.base_lora_matrix_dic["style_up"].T
+
             if self.masked_matrix["style"] is True: 
                 D_style *= self.mask_style
-            masked_style_weight = D_style @ U_style
+                D_style_base *= self.mask_style
+            
+            if self.use_base_weight: 
+                masked_style_weight = (D_style @ U_style) - (D_style_base @ U_style_base)
+            else:
+                masked_style_weight = (D_style @ U_style)
         
             # 这里也是输入乘以最终权重，只不过变成了是在计算 style 的而已
             up_hidden_states_style = hidden_states_style.to(dtype) @ masked_style_weight
@@ -472,9 +493,18 @@ class UnZipLoRALinearLayer(nn.Module):
             D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * sigma_mask_content
             U_content = self.lora_matrix_dic["content_up"].weight.T
 
+            D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
+            U_content_base = self.base_lora_matrix_dic["content_up"].T
+
             if self.masked_matrix["content"] is True:
                 D_content = D_content * self.mask_content
-            merged_content_weight = D_content @ U_content
+                D_content_base = D_content_base * self.mask_content
+            
+            if self.use_base_weight:
+                merged_content_weight = (D_content @ U_content) - (D_content_base @ U_content_base)
+            else:
+                merged_content_weight = (D_content @ U_content)
+
             up_hidden_states_content = hidden_states_content.to(dtype) @ merged_content_weight
             
             # ------------------------------------------------------------
@@ -492,9 +522,18 @@ class UnZipLoRALinearLayer(nn.Module):
             D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * sigma_mask_style
             U_style = self.lora_matrix_dic["style_up"].weight.T
 
+            D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
+            U_style_base = self.base_lora_matrix_dic["style_up"].T
+
             if self.masked_matrix["style"] is True:
                 D_style = D_style * self.mask_style
-            merged_style_weight = D_style @ U_style
+                D_style_base = D_style_base * self.mask_style
+            
+            if self.use_base_weight:
+                merged_style_weight = (D_style @ U_style) - (D_style_base @ U_style_base)
+            else:
+                merged_style_weight = (D_style @ U_style)
+            
             up_hidden_states_style = hidden_states_style.to(dtype) @ merged_style_weight
             added_hidden_states = up_hidden_states_style.to(orig_dtype)
         return added_hidden_states
@@ -508,19 +547,33 @@ class UnZipLoRALinearLayerInfer(nn.Module):
         lora_matrix_key: List[str] = None, 
         device: Optional[Union[torch.device, str]] = None,
         dtype: Optional[torch.dtype] = None,
+        use_base_weight=True,
     ):
         super().__init__()
         self.lora_matrix_dic = nn.ModuleDict()
+        self.base_lora_matrix_dic = nn.ParameterDict()
         
         # y用于控制 block separation
         self.masked_matrix = {}
-        
+
+        # 用来控制是否使用 base_weights        
+        self.use_base_weight = use_base_weight
+        self.rank = rank
         
         for key in lora_matrix_key:
             self.lora_matrix_dic[f"{key}_down"] = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
             self.lora_matrix_dic[f"{key}_up"] = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
+
+            self.base_lora_matrix_dic[f"{key}_down"] = nn.Parameter(
+                torch.zeros(rank, in_features, device=device, dtype=dtype), requires_grad=False
+            )
+            self.base_lora_matrix_dic[f"{key}_up"] = nn.Parameter(
+                torch.zeros(out_features, rank, device=device, dtype=dtype), requires_grad=False
+            )
+
             nn.init.normal_(self.lora_matrix_dic[f"{key}_down"].weight, std=1 / rank)
             nn.init.normal_(self.lora_matrix_dic[f"{key}_up"].weight, std=1 / rank)
+        
             self.masked_matrix[key] = False
         self.lora_matrix_key = lora_matrix_key
         self.out_features = out_features
@@ -560,7 +613,14 @@ class UnZipLoRALinearLayerInfer(nn.Module):
                 D_content = self.lora_matrix_dic["content_down"].weight.T * merged_content * sigma_mask_content
                 U_content = self.lora_matrix_dic["content_up"].weight.T 
 
-                masked_content_weight = D_content @ U_content
+                D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
+                U_content_base = self.base_lora_matrix_dic["content_up"].T
+
+                if self.use_base_weight:
+                    masked_content_weight = D_content @ U_content - D_content_base @ U_content_base
+                else:
+                    masked_content_weight = D_content @ U_content
+                
                 up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
             
             if self.masked_matrix["style"] is True: 
@@ -569,7 +629,13 @@ class UnZipLoRALinearLayerInfer(nn.Module):
                 D_style = self.lora_matrix_dic["style_down"].weight.T * merged_style * sigma_mask_style
                 U_style = self.lora_matrix_dic["style_up"].weight.T 
                 
-                masked_style_weight = D_style @ U_style
+                D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
+                U_style_base = self.base_lora_matrix_dic["style_up"].T
+                
+                if self.use_base_weight:
+                    masked_style_weight = D_style @ U_style - D_style_base @ U_style_base
+                else:
+                    masked_style_weight = D_style @ U_style
 
                 up_hidden_states_style = hidden_states_style.to(dtype) @ masked_style_weight
             added_hidden_states = up_hidden_states_style.to(orig_dtype) + up_hidden_states_content.to(orig_dtype)
@@ -581,8 +647,15 @@ class UnZipLoRALinearLayerInfer(nn.Module):
             else: 
                 D_content = self.lora_matrix_dic["content_down"].weight.T * merged_content * sigma_mask_content
                 U_content = self.lora_matrix_dic["content_up"].weight.T 
-                                        
-                masked_content_weight = D_content @ U_content
+
+                D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
+                U_content_base = self.base_lora_matrix_dic["content_up"].T
+
+                if self.use_base_weight:
+                    masked_content_weight = D_content @ U_content - D_content_base @ U_content_base
+                else:
+                    masked_content_weight = D_content @ U_content
+
                 up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
             added_hidden_states = up_hidden_states_content.to(orig_dtype)
         if self.forward_type == "style":
@@ -592,9 +665,15 @@ class UnZipLoRALinearLayerInfer(nn.Module):
             else: 
                 D_style = self.lora_matrix_dic["style_down"].weight.T * merged_style * sigma_mask_style
                 U_style = self.lora_matrix_dic["style_up"].weight.T 
-
-                masked_style_weight =  D_style @ U_style
-
+                
+                D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
+                U_style_base = self.base_lora_matrix_dic["style_up"].T
+                
+                if self.use_base_weight:
+                    masked_style_weight = D_style @ U_style - D_style_base @ U_style_base
+                else:
+                    masked_style_weight = D_style @ U_style
+            
                 up_hidden_states_style = hidden_states_style.to(dtype) @ masked_style_weight
             added_hidden_states = up_hidden_states_style.to(orig_dtype)
         return added_hidden_states

@@ -123,7 +123,9 @@ class StableDiffusionXLUnZipLoRAPipeline(
         min_rank_content=32,
         min_rank_style=24,
         alpha=1.0,
-        timestep_mode="priecewise"
+        timestep_mode="priecewise",
+        use_time_control=True,
+        use_base_weight=True,
     ):
         self.register_modules(
             vae=vae,
@@ -149,6 +151,8 @@ class StableDiffusionXLUnZipLoRAPipeline(
         self.min_rank_style = min_rank_style
         self.alpha = alpha
         self.timestep_mode = timestep_mode
+        self.use_time_control = use_time_control
+        self.use_base_weight = use_base_weight
         # ----------------------------------------------------------------------------
 
         add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
@@ -588,15 +592,17 @@ class StableDiffusionXLUnZipLoRAPipeline(
                 # 动态计算当前 timestep 的 sigma_mask
                 from unziplora_unet.utils import get_mask_by_timestep
 
-                sigma_mask_content = get_mask_by_timestep(t, self.scheduler.config.num_train_timesteps, self.max_rank, self.min_rank_content,alpha=self.alpha,branch="content", mode=self.timestep_mode)
-                sigma_mask_style = get_mask_by_timestep(t, self.scheduler.config.num_train_timesteps, self.max_rank, self.min_rank_style, alpha=self.alpha, branch="style", mode=self.timestep_mode)
+                sigma_mask_content, sigma_mask_style = None, None
+                if self.use_time_control:
+                    sigma_mask_content = get_mask_by_timestep(t, self.scheduler.config.num_train_timesteps, self.max_rank, self.min_rank_content,alpha=self.alpha,branch="content", mode=self.timestep_mode)
+                    sigma_mask_style = get_mask_by_timestep(t, self.scheduler.config.num_train_timesteps, self.max_rank, self.min_rank_style, alpha=self.alpha, branch="style", mode=self.timestep_mode)
 
                 #添加到当前cross_attention_kwargs字典中
                 current_cross_attention_kwargs = {}
                 if self.cross_attention_kwargs is not None:
                     current_cross_attention_kwargs.update(self.cross_attention_kwargs)
-                current_cross_attention_kwargs["sigma_mask_content"] = sigma_mask_content.detach().to(device)
-                current_cross_attention_kwargs["sigma_mask_style"] = sigma_mask_style.detach().to(device)
+                current_cross_attention_kwargs["sigma_mask_content"] = sigma_mask_content.detach().to(device) if sigma_mask_content is not None else None
+                current_cross_attention_kwargs["sigma_mask_style"] = sigma_mask_style.detach().to(device) if sigma_mask_style is not None else None
                 # ----------------------------------------------------------------
                 
                 
@@ -710,6 +716,8 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
         alpha=1.0,
         branch="content",
         timestep_mode="priecewise",
+        use_time_control=True,
+        use_base_weight=True,
     ):
         super().__init__(
             vae=vae,
@@ -729,6 +737,8 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
         self.alpha = alpha
         self.branch = branch
         self.timestep_mode = timestep_mode
+        self.use_time_control = use_time_control
+        self.use_base_weight = use_base_weight
     
     def get_mask_by_timestep(self, timestep, max_timestep, max_rank, min_rank, alpha, branch, mode):
         from unziplora_unet.utils import get_mask_by_timestep as _get_mask
@@ -738,13 +748,50 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
             max_rank,min_rank,
             alpha,branch,mode
         )
-    def setup_lora_layers(self, lora_path, rank=64):
+
+    def setup_lora_layers(self, lora_path, use_base_weight=True, base_weight_path: str=None, branch:str=None, strict_base:bool=True,rank=64):
         from unziplora_unet.singlelora import LoRACrossAttnProcessor, LoRALinearLayer
         from safetensors.torch import load_file
         import os
 
-        lora_attn_procs = {}
 
+        def _load_lora_state_dict(path: str):
+            if os.path.isdir(path):
+                preferred = os.path.join(path, "pytorch_lora_weights.safetensors")
+                if os.path.isfile(preferred):
+                    return load_file(preferred)
+
+                safetensors_files = sorted([f for f in os.listdir(path) if f.endswith(".safetensors")])
+                if not safetensors_files:
+                    raise ValueError(f"No .safetensors file found in {path}")
+                return load_file(os.path.join(path, safetensors_files[0]))
+            return load_file(path)
+
+        active_branch = branch or getattr(self, "branch", None)
+        if use_base_weight and active_branch not in {"content", "style"}:
+            raise ValueError(f"branch must be 'content' or 'style', got  {active_branch}")
+
+        """
+        lora_state_dict 和 base_state_dict 在保存文件中存储的形式不一样:
+        
+        lora_state_dict 中的 key 是: unet.unet.down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_out.0.lora.up.weight
+        lora_state_dict 中的 value 是: 对应的lora矩阵
+
+        base_state_dict 中的 key 是: unet.down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_out.0.lora.up.weight
+        base_state_dict 中的 value 是: 对应的lora矩阵
+        """
+
+        lora_state_dict = _load_lora_state_dict(lora_path)
+        
+        base_state_dict = None
+        if use_base_weight:
+            if base_weight_path is None:
+                raise ValueError("base_weight_path is required when use_base_weight=True")
+            base_state_dict = torch.load(base_weight_path, map_location="cpu")
+            if not isinstance(base_state_dict, dict):
+                raise TypeError(f"Expected dict from {base_weight_path}, got {type(base_state_dict)}")
+        
+        lora_attn_procs = {}
         for name in self.unet.attn_processors.keys():
             cross_attention_dim = (
                 None
@@ -759,52 +806,78 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
             elif name.startswith("down_blocks"):
                 block_id = int(name[len("down_blocks.")])
                 hidden_size = self.unet.config.block_out_channels[block_id]
+            else:
+                continue
         
             lora_attn_procs[name] = LoRACrossAttnProcessor(
                 hidden_size=hidden_size,
                 cross_attention_dim=cross_attention_dim,
                 rank=rank,
-                lora_linear_layer=LoRALinearLayer
+                lora_linear_layer=LoRALinearLayer,
+                use_base_weight=self.use_base_weight,
             )
         self.unet.set_attn_processor(lora_attn_procs)
 
-        if os.path.isdir(lora_path):
-            safetensors_files = [f for f in os.listdir(lora_path) if f.endswith(".safetensors")]
-            if safetensors_files:
-                lora_state_dict = load_file(os.path.join(lora_path, safetensors_files[0]))
-            else:
-                raise ValueError(f"No .safetensors file found in {lora_path}")
-        else:
-            lora_state_dict = load_file(lora_path)
-        
-        for name, processor in self.unet.attn_processors.items():
-            prefix = f"unet.{name}"
+        part_to_attr = {
+            "to_q": "to_q_lora",
+            "to_k": "to_k_lora",
+            "to_v": "to_v_lora",
+            "to_out.0": "to_out_lora"
+        }
 
-            down_weight = lora_state_dict.get(f"{prefix}.to_q.lora.down.weight")
-            up_weight = lora_state_dict.get(f"{prefix}.to_q.lora.up.weight")
-            if down_weight is not None and up_weight is not None:
-                processor.to_q_lora.down.weight.data = down_weight
-                processor.to_q_lora.up.weight.data = up_weight
+        for name, processor in self.unet.attn_processors.items():
+            name_pre = '.'.join(name.split('.')[:-1])
+            lora_prefix = f"unet.unet.{name_pre}"
+            base_prefix = f"unet.{name_pre}"
+
+            print(f"-------------------------------{name}-------------------------------")
+            print(f"{lora_prefix}")
+            print(f"{base_prefix}")
+
+            if hasattr(processor, "load_from_state_dicts"):
+                #print("enter load_from_state_dicts")
+                
+                processor.load_from_state_dicts(
+                    lora_prefix=lora_prefix,
+                    base_prefix=base_prefix,
+                    lora_state_dict=lora_state_dict,
+                    base_state_dict=base_state_dict,
+                    branch=active_branch,
+                )
+                continue 
+                print()
             
-            down_weight = lora_state_dict.get(f"{prefix}.to_k.lora.down.weight")
-            up_weight = lora_state_dict.get(f"{prefix}.to_k.lora.up.weight")
-            if down_weight is not None and up_weight is not None:
-                processor.to_k_lora.down.weight.data = down_weight
-                processor.to_k_lora.up.weight.data = up_weight
+            # 手动兼容
+            #print("not find load_from_state_dicts")
+            for part, attr in part_to_attr.items():
+                layer = getattr(processor, attr)
+
+                down = lora_state_dict.get(f"{lora_prefix}.{part}.lora.down.weight")
+                up = lora_state_dict.get(f"{lora_prefix}.{part}.lora.up.weight")
+                if down is not None and up is not None:
+                    layer.down.weight.data = down.to(layer.down.weight.device, dtype=layer.down.weight.dtype)
+                    layer.up.weight.data = up.to(layer.up.weight.device, dtype=layer.up.weight.dtype)
+                
+                if use_base_weight and hasattr(layer, "base_down") and hasattr(layer, "base_up"):
+                    bdown_key = f"{base_prefix}.{part}.lora.down.base_{active_branch}"
+                    bup_key = f"{base_prefix}.{part}.lora.up.base_{active_branch}"
+                    bdown = base_state_dict.get(bdown_key)
+                    bup = base_state_dict.get(bup_key)
+
+                    if strict_base and (bdown in None or bup is None):
+                        raise KeyError(f"Missing base key(s): {bdown_key}, {bup_key}")
+
+                    if bdown is not None and bup is not None:
+                        layer.base_down.data = bdown.to(layer.base_down.device, dtype=layer.base_down.dtype)
+                        layer.base_up.data = bup.to(layer.base_up.device, dtype=layer.base_up.dtype)
             
-            down_weight = lora_state_dict.get(f"{prefix}.to_v.lora.down.weight")
-            up_weight = lora_state_dict.get(f"{prefix}.to_v.lora.up.weight")
-            if down_weight is not None and up_weight is not None:
-                processor.to_v_lora.down.weight.data = down_weight
-                processor.to_v_lora.up.weight.data = up_weight
-            
-            down_weight = lora_state_dict.get(f"{prefix}.to_out.0.lora.down.weight")
-            up_weight = lora_state_dict.get(f"{prefix}.to_out.0.lora.up.weight")
-            if down_weight is not None and up_weight is not None:
-                processor.to_out_lora.down.weight.data = down_weight
-                processor.to_out_lora.up.weight.data = up_weight
-        
-        print(f"Successfully loaded LoRA weights from {lora_path}") 
+            #print()
+        """           
+        print(
+            f"Successfully loaded LoRA from {lora_path}"
+            + (f" with base weights from {base_weight_path} (branch={active_branch})" if use_base_weight else "")
+        )
+        """
 
 
     @torch.no_grad()
@@ -1008,20 +1081,22 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
                 
                 # -------------------------------------------------------------------------------
                 # 动态计算 sigma_mask 
-                sigma_mask = self.get_mask_by_timestep(
-                    timestep=t,
-                    max_timestep=self.scheduler.num_train_timesteps,
-                    max_rank=self.max_rank,
-                    min_rank=self.min_rank,
-                    alpha=self.alpha,
-                    branch = self.branch,
-                    mode = self.timestep_mode
-                )
+                sigma_mask = None
+                if self.use_time_control:
+                    sigma_mask = self.get_mask_by_timestep(
+                        timestep=t,
+                        max_timestep=self.scheduler.num_train_timesteps,
+                        max_rank=self.max_rank,
+                        min_rank=self.min_rank,
+                        alpha=self.alpha,
+                        branch = self.branch,
+                        mode = self.timestep_mode
+                    )
 
                 current_cross_attention_kwargs = {}
                 if self.cross_attention_kwargs is not None:
                     current_cross_attention_kwargs.update(self.cross_attention_kwargs)
-                current_cross_attention_kwargs["sigma_mask"] = sigma_mask.detach().to(device)
+                current_cross_attention_kwargs["sigma_mask"] = sigma_mask.detach().to(device) if sigma_mask is not None else None
                 # -------------------------------------------------------------------------------
                 
                 # expand the latents if we are doing classifier free guidance

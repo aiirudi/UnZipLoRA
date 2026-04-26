@@ -921,12 +921,14 @@ def parse_args(input_args=None):
 
     # 随机矩阵svd分解初始化
     parser.add_argument("--sig_type",type=str,default="last",help="随机矩阵svd分解初始化方式") 
+    parser.add_argument("--use_base_weight",type=str2bool,default="true",help="推理过程中减去随机矩阵svd分解初始化方式") 
 
     # 加入content LoRA 和 style LoRA 的非对称时间步策略
     parser.add_argument("--min_rank_content",type=int,default=32,help="content LoRA非堆成时间步的最小秩数") 
     parser.add_argument("--min_rank_style",type=int,default=24,help="style LoRA非堆成时间步的最小秩数") 
     parser.add_argument("--alpha", type=float, default=1.0, help='时间步系数控制参数')
     parser.add_argument("--timestep_mode", type=str,choices=["priecewise", "linear"],default="priecewise", help='时间步系数计算模式')
+    parser.add_argument("--use_time_control", type=str2bool, default='false', help='启用时间步mask')
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1442,7 +1444,8 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
-                sig_type=args.sig_type
+                sig_type=args.sig_type,
+                use_base_weight=args.use_base_weight
             )
         )
         attn_module.to_k.set_lora_layer(
@@ -1455,7 +1458,8 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
-                sig_type=args.sig_type
+                sig_type=args.sig_type,
+                use_base_weight=args.use_base_weight
             )
         )
         attn_module.to_v.set_lora_layer(
@@ -1468,7 +1472,8 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
-                sig_type=args.sig_type
+                sig_type=args.sig_type,
+                use_base_weight=args.use_base_weight
             )
         )
         attn_module.to_out[0].set_lora_layer(
@@ -1481,7 +1486,8 @@ def main(args):
                 # dtype=weight_dtype,
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
-                sig_type=args.sig_type
+                sig_type=args.sig_type,
+                use_base_weight=args.use_base_weight
             )
         )
 
@@ -2200,7 +2206,12 @@ def main(args):
             weight_content = D @ U
             base_weight_content = D_base @ U_base
 
-            content_out = content_inp @ (weight_content - base_weight_content)
+            if module.use_base_weight:
+                weight = (weight_content - base_weight_content)
+            else:
+                weight = weight_content
+
+            content_out = content_inp @ weight
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
         return _hook
 
@@ -2242,6 +2253,11 @@ def main(args):
             weight_content = D_c @ U_c
             base_weight_content = D_c_base @ U_c_base
 
+            if lora.use_base_weight:
+                weight = (weight_content - base_weight_content)
+            else:
+                weight = weight_content
+
             delta_c = hs_c.to(dtype) @ (weight_content - base_weight_content)
 
             if lora.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
@@ -2259,7 +2275,12 @@ def main(args):
         weight_style = D_s @ U_s
         base_weight_style = D_s_base @ U_s_base
 
-        delta_s = hs_s.to(dtype) @ (weight_style - base_weight_style)
+        if lora.use_base_weight:
+            weight = (weight_style - base_weight_style)
+        else:
+            weight = weight_style
+
+        delta_s = hs_s.to(dtype) @ weight
 
         ft = lora.forward_type
         if ft == 'content':
@@ -2411,8 +2432,10 @@ def main(args):
                 )
                 timesteps = timesteps.long()
 
-                sigma_mask_content = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_content, branch="content", mode="priecewise")
-                sigma_mask_style = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_style, branch="style", mode="priecewise")
+                sigma_mask_content, sigma_mask_style = None, None
+                if args.use_time_control:
+                    sigma_mask_content = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_content, alpha=args.alpha,branch="content", mode=args.timestep_mode)
+                    sigma_mask_style = get_mask_by_timestep(timesteps, noise_scheduler.config.num_train_timesteps, args.rank, args.min_rank_style, alpha=args.alpha,branch="style", mode=args.timestep_mode)
 
                 # Add noise to the model input according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
@@ -2457,8 +2480,8 @@ def main(args):
                         prompt_embeds_style_forward_input,
                         added_cond_kwargs=unet_added_conditions,
                         cross_attention_kwargs={
-                            "sigma_mask_content": sigma_mask_content.detach().to(prompt_embeds_input.device),
-                            "sigma_mask_style": sigma_mask_style.detach().to(prompt_embeds_input.device),
+                            "sigma_mask_content": sigma_mask_content.detach().to(prompt_embeds_input.device) if sigma_mask_content is not None else None,
+                            "sigma_mask_style": sigma_mask_style.detach().to(prompt_embeds_input.device) if sigma_mask_style is not None else None,
                         },
                     ).sample
                 else:
@@ -2804,14 +2827,14 @@ def main(args):
                             revision=args.revision,
                         )
                         pipeline = StableDiffusionXLUnZipLoRAPipeline.from_pretrained(
-                        args.pretrained_model_name_or_path,
-                        vae=vae,
-                        text_encoder=accelerator.unwrap_model(text_encoder_one),
-                        text_encoder_2=accelerator.unwrap_model(text_encoder_two),
-                        unet=accelerator.unwrap_model(unet),
-                        revision=args.revision,
-                        torch_dtype=weight_dtype,
-                    )
+                            args.pretrained_model_name_or_path,
+                            vae=vae,
+                            text_encoder=accelerator.unwrap_model(text_encoder_one),
+                            text_encoder_2=accelerator.unwrap_model(text_encoder_two),
+                            unet=accelerator.unwrap_model(unet),
+                            revision=args.revision,
+                            torch_dtype=weight_dtype,
+                        )
 
                     # We train on the simplified learning objective. If we were previously predicting a variance, we need the scheduler to ignore it
                     scheduler_args = {}
@@ -3042,12 +3065,15 @@ def main(args):
             min_rank_style=args.min_rank_style,
             alpha=1.0,
             timestep_mode=args.timestep_mode,
+            use_time_control=args.use_time_control,
+            use_base_weight=args.use_base_weight,
         )
 
         # load attention processors
         pipeline.unet = insert_unziplora_to_unet(pipeline.unet, f"{args.output_dir}_content", f"{args.output_dir}_style", \
                 weight_content_path=f"{args.output_dir}_merger_content.pth" , weight_style_path=f"{args.output_dir}_merger_style.pth", \
-                rank=args.rank, device=accelerator.device)
+                base_weight_content_path=f"{args.output_dir}_base_weight_content.pth", base_weight_style_path=f"{args.output_dir}_base_weight_style.pth",
+                use_base_weight=args.use_base_weight,rank=args.rank, device=accelerator.device)
         # pipeline.unet = unet
         del unet
 
@@ -3085,6 +3111,8 @@ def main(args):
 
         # 只在有 content_prompt 下生成图片
         if args.validation_prompt_content and args.num_validation_images > 0:
+            
+            # 自定义管道类,想对加载单LoRA 时也采用时间步
             pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
                 vae=vae,
@@ -3094,9 +3122,23 @@ def main(args):
                 min_rank=args.min_rank_content,
                 alpha=args.alpha,
                 branch="content",
-                timestep_mode=args.timestep_mode
+                timestep_mode=args.timestep_mode,
+                use_time_control=args.use_time_control,
+                use_base_weight=args.use_base_weight
             )
-            pipeline.setup_lora_layers(f"{args.output_dir}_content", rank=args.rank)
+            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
+            base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
+            
+            """
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                vae=vae,
+                revision=args.revision,
+                torch_dtype=weight_dtype,
+            )
+            pipeline.load_lora_weights(f"{args.output_dir}_content")
+            """
+
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             images, image_list, heatmap_panels = log_validation(
@@ -3124,6 +3166,8 @@ def main(args):
         
         # 只在有 style_prompt 下生成图片
         if args.validation_prompt_style and args.num_validation_images > 0:
+            
+            # 自定义管道类,想对加载单LoRA 时也采用时间步
             pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
                 vae=vae,
@@ -3133,9 +3177,23 @@ def main(args):
                 min_rank=args.min_rank_style,
                 alpha=args.alpha,
                 branch="style",
-                timestep_mode=args.timestep_mode
+                timestep_mode=args.timestep_mode,
+                use_time_control=args.use_time_control,
+                use_base_weight=args.use_base_weight,
             )
-            pipeline.setup_lora_layers(f"{args.output_dir}_style", rank=args.rank)
+            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_style", rank=args.rank, use_base_weight=args.use_base_weight,
+            base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
+
+        
+            """
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                vae=vae,
+                revision=args.revision,
+                torch_dtype=weight_dtype,
+            )
+            pipeline.load_lora_weights(f"{args.output_dir}_style")
+            """
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             images, image_list, heatmap_panels = log_validation(

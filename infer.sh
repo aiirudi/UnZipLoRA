@@ -17,7 +17,25 @@ export VALID_PROMPT
 export VALID_STYLES=(
   "a rose on a skateboard in sketch style"
   "a rose in a snowy landscape in sketch style"
+  "a rose on a wooden table in sketch style"
+
+  "a deer on a skateboard in sketch style"
+  "a deer in a snowy landscape in sketch style"
+  "a deer on a wooden table in sketch style"
+
+  "a dog on a skateboard in sketch style"
+  "a dog in a snowy landscape in sketch style"
+  "a dog on a wooden table in sketch style"
+
+  "a chair on a skateboard in sketch style"
+  "a teapot in a snowy landscape in sketch style"
+  "a bicycle on a wooden table in sketch style"
+
+  "a robot in sketch style"
+  "a cow in sketch style"
+  "a book in sketch style"
 )
+
 VALID_STYLE=$(IFS=,; echo "${VALID_STYLES[*]}")
 export VALID_STYLE
 

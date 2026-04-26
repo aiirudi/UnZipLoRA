@@ -329,6 +329,8 @@ def unet_inverse_ziplora_state_dict(
 def initialize_unziplora_layer_for_inference(state_dict_content_down, state_dict_content_up, \
     state_dict_style_down, state_dict_style_up, \
     state_dict_merger_content, state_dict_merger_style, \
+    state_dict_base_content_down, state_dict_base_content_up, \
+    state_dict_base_style_down, state_dict_base_style_up,\
     part, **model_kwargs):
     '''
     Insert unziplora to inference
@@ -342,7 +344,11 @@ def initialize_unziplora_layer_for_inference(state_dict_content_down, state_dict
                 "lora_matrix_dic.style_down.weight": state_dict_style_down[part],
                 "lora_matrix_dic.style_up.weight": state_dict_style_up[part],
                 "merge_content": state_dict_merger_content[part],
-                "merge_style": state_dict_merger_style[part]
+                "merge_style": state_dict_merger_style[part],
+                "base_lora_matrix_dic.content_down": state_dict_base_content_down[part],
+                "base_lora_matrix_dic.content_up": state_dict_base_content_up[part],
+                "base_lora_matrix_dic.style_down": state_dict_base_style_down[part],
+                "base_lora_matrix_dic.style_up": state_dict_base_style_up[part],
             },
             strict=False,
         )
@@ -353,6 +359,10 @@ def initialize_unziplora_layer_for_inference(state_dict_content_down, state_dict
                 "lora_matrix_dic.content_up.weight": state_dict_content_up[part],
                 "lora_matrix_dic.style_down.weight": state_dict_style_down[part],
                 "lora_matrix_dic.style_up.weight": state_dict_style_up[part],
+                "base_lora_matrix_dic.content_down": state_dict_base_content_down[part],
+                "base_lora_matrix_dic.content_up": state_dict_base_content_up[part],
+                "base_lora_matrix_dic.style_down": state_dict_base_style_down[part],
+                "base_lora_matrix_dic.style_up": state_dict_base_style_up[part],
             },
             strict=False,
         )
@@ -400,9 +410,35 @@ def use_lora_mergers_for_inference(
         merger_style[part] = tensors_style[merge_style]
     return merger_content, merger_style
 
+
+def use_lora_base_weights_for_inference(
+    tensors: Dict[str, torch.Tensor], key: str, prefix: str = "unet.unet.", branch: str = None
+) -> Dict[str, torch.Tensor]:
+    """
+    Initialize the saved model value for down and up LoRA matrix
+    Args:
+        tensors (torch.Tensor): state dict of lora weights
+        key (str): target attn layer's key
+        prefix (str, optional): prefix for state dict.Defaults to "unet.unet.".
+    """
+    if branch is None:
+        raise ValueError("在用UnZipLoRALinearInfer 加载base 推理时, branch必须传入, 来加载 base weights")
+
+    target_key = prefix + key
+    base_down = {}
+    base_up = {}
+    # print(tensors.keys())
+    for part in ["to_q", "to_k", "to_v", "to_out.0"]:
+        down_key = target_key + f".{part}.lora.down.base_{branch}"
+        up_key = target_key + f".{part}.lora.up.base_{branch}"
+        base_down[part] = tensors[down_key]
+        base_up[part] = tensors[up_key]
+    return base_down, base_up
+
 def insert_unziplora_to_unet(
     unet: UNet2DConditionModel, content_lora_path: str, style_lora_path: str, weight_content_path: str = None, weight_style_path: str = None, \
-        rank: int = 64, device: Optional[Union[torch.device, str]] = None, **kwargs
+        base_weight_content_path: str = None, base_weight_style_path: str = None,\
+        use_base_weight: bool=True,rank: int = 64, device: Optional[Union[torch.device, str]] = None, **kwargs
 ):
     """
     Initialize the saved model value for content and style soft mask merger
@@ -420,6 +456,12 @@ def insert_unziplora_to_unet(
     if weight_style_path is not None:
         weight_style_state_dict = torch.load(weight_style_path)
     # weight_state_dict = {key: value.to(device) for key, value in weight_state_dict.items()}
+
+
+    if base_weight_content_path is not None:
+        base_weight_content_state_dict = torch.load(base_weight_content_path)
+    if base_weight_style_path is not None:
+        base_weight_style_state_dict = torch.load(base_weight_style_path)
     
     # 吧
     for attn_processor_name, attn_processor in unet.attn_processors.items():
@@ -436,12 +478,16 @@ def insert_unziplora_to_unet(
         state_dict_content_down, state_dict_content_up = use_lora_weights_for_inference(tensors_content, key=attn_name)
         state_dict_style_down, state_dict_style_up = use_lora_weights_for_inference(tensors_style, key=attn_name)
         
+        state_dict_base_content_down, state_dict_base_content_up = use_lora_base_weights_for_inference(base_weight_content_state_dict, key=attn_name, prefix="unet.", branch="content")
+        state_dict_base_style_down, state_dict_base_style_up = use_lora_base_weights_for_inference(base_weight_style_state_dict, key=attn_name, prefix="unet.", branch="style")
+
         if weight_content_path is not None and weight_style_path is not None:
             # 返回融合之后的权重
             state_dict_merge_content, state_dict_merge_style = use_lora_mergers_for_inference(weight_content_state_dict, weight_style_state_dict, key=attn_name, prefix="unet.")
         else:
             state_dict_merge_style = None
             state_dict_merge_content = None
+
         # Set the `lora_layer` attribute of the attention-related matrices.
         
         # 将一个attention layer 中的所有 lora lora 参数都加载到一个字典中
@@ -451,7 +497,11 @@ def insert_unziplora_to_unet(
             "state_dict_style_down": state_dict_style_down,
             "state_dict_style_up": state_dict_style_up,
             "state_dict_merger_content": state_dict_merge_content,
-            "state_dict_merger_style": state_dict_merge_style 
+            "state_dict_merger_style": state_dict_merge_style,
+            "state_dict_base_content_down": state_dict_base_content_down,
+            "state_dict_base_content_up": state_dict_base_content_up,
+            "state_dict_base_style_down": state_dict_base_style_down,
+            "state_dict_base_style_up": state_dict_base_style_up
         }
         
         attn_module.to_q.set_lora_layer(
@@ -463,6 +513,7 @@ def insert_unziplora_to_unet(
                 lora_matrix_key=["content", "style"],
                 rank=rank,
                 device=device,
+                use_base_weight=use_base_weight,
                 **kwargs,
             )
         )
@@ -474,6 +525,7 @@ def insert_unziplora_to_unet(
                 lora_matrix_key=["content", "style"],
                 device=device,
                 rank=rank,
+                use_base_weight=use_base_weight,
                 **kwargs,
             )
         )
@@ -485,6 +537,7 @@ def insert_unziplora_to_unet(
                 device=device,
                 lora_matrix_key=["content", "style"],
                 rank=rank,
+                use_base_weight=use_base_weight,
                 **kwargs,
             )
         )
@@ -496,6 +549,7 @@ def insert_unziplora_to_unet(
                 device=device,
                 lora_matrix_key=["content", "style"],
                 rank=rank,
+                use_base_weight=use_base_weight,
                 **kwargs,
             )
         )
@@ -513,7 +567,9 @@ def load_pipeline_from_sdxl(MODEL_ID,
     min_rank_content=32,
     min_rank_style=24,
     alpha=1.0,
-    timestep_mode="priecewise"
+    timestep_mode="priecewise",
+    use_time_control=True,
+    use_base_weight=True,
     ):
     """
     log UnZipLoRA sdxl pipeline, enabling use
@@ -568,7 +624,9 @@ def load_pipeline_from_sdxl(MODEL_ID,
         min_rank_content=min_rank_content,
         min_rank_style=min_rank_style,
         alpha=alpha,
-        timestep_mode=timestep_mode
+        timestep_mode=timestep_mode,
+        use_time_control=use_time_control,
+        use_base_weight=use_base_weight,
     )
     return pipeline
 
