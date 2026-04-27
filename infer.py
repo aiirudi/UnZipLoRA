@@ -91,11 +91,17 @@ def parse_args(input_args=None):
         help=("The dimension of the LoRA update matrices."),
     )
     parser.add_argument(
+
+    )
+    
+    # 随机矩阵svd初始化
+    parser.add_argument(
         "--use_base_weight",
         type=str2bool,
         default="true",
         help=("The dimension of the LoRA update matrices."),
     )
+    parser.add_argument("--with_svd_init",type=str2bool, default="true", help="是否使用随机矩阵svd分解初始化权重;关闭是使用nn.Linear默认初始化")
     
     # 加入content LoRA 和 style LoRA 的非对称时间步策略
     parser.add_argument("--min_rank_content",type=int,default=32,help="content LoRA非堆成时间步的最小秩数") 
@@ -212,25 +218,30 @@ def main(args):
         
         # 只生成 content 图片
         if len(args.validation_prompt_content_recontext) != 0 and args.validation_prompt_content_recontext != ['']: 
-            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
-                MODEL_ID,
-                vae=vae,
-                torch_dtype=weight_dtype,
-                revision=None, 
-                max_rank=args.rank,
-                min_rank=args.min_rank_content,
-                alpha=args.alpha,
-                branch="content",
-                timestep_mode=args.timestep_mode,
-                use_time_control=args.use_time_control,
-                use_base_weight=args.use_base_weight,
-            )
             prompt_catogory = os.path.join(args.save_dir, "content_recontextual_outputs")
             os.makedirs(prompt_catogory, exist_ok=True)
             
+            if args.with_svd_init:
+                pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
+                    MODEL_ID,
+                    vae=vae,
+                    torch_dtype=weight_dtype,
+                    revision=None, 
+                    max_rank=args.rank,
+                    min_rank=args.min_rank_content,
+                    alpha=args.alpha,
+                    branch="content",
+                    timestep_mode=args.timestep_mode,
+                    use_time_control=args.use_time_control,
+                    use_base_weight=args.use_base_weight,
+                )
+                pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
+                base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
+            else:
+                pipeline = StableDiffusionXLPipeline.from_pretrained(model_id,)
+                pipeline.load_lora_weights(f"{args.output_dir}_content")
             pipeline = pipeline.to(device, dtype=weight_dtype)
-            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
-            base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
+
             # pipeline.load_lora_weights(f"{args.output_dir}")
             print(f"generate recontext prompt {args.validation_prompt_content_recontext}")
             generate_save_img(args, pipeline, args.validation_prompt_content_recontext, prompt_catogory)
@@ -242,22 +253,29 @@ def main(args):
             prompt_catogory = os.path.join(args.save_dir, "style_recontextual_outputs")
             os.makedirs(prompt_catogory, exist_ok=True)
             
-            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
-                MODEL_ID,
-                vae=vae,
-                revision=None,
-                torch_dtype=weight_dtype,
-                max_rank=args.rank,
-                min_rank=args.min_rank_style,
-                alpha=args.alpha,
-                branch="style",
-                timestep_mode=args.timestep_mode,
-                use_time_control=args.use_time_control,
-                use_base_weight=args.use_base_weight,
-            )
+            if args.with_svd_init:
+                pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
+                    MODEL_ID,
+                    vae=vae,
+                    revision=None,
+                    torch_dtype=weight_dtype,
+                    max_rank=args.rank,
+                    min_rank=args.min_rank_style,
+                    alpha=args.alpha,
+                    branch="style",
+                    timestep_mode=args.timestep_mode,
+                    use_time_control=args.use_time_control,
+                    use_base_weight=args.use_base_weight,
+                )
+                pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_style", rank=args.rank, use_base_weight=args.use_base_weight,
+                base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
+            else:
+                pipeline = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                )
+                pipeline.load_lora_weights(f"{args.output_dir}_style")
+            
             pipeline = pipeline.to(device, dtype=weight_dtype)
-            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_style", rank=args.rank, use_base_weight=args.use_base_weight,
-            base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
             # pipeline.load_lora_weights(f"{args.output_dir}")
             print(f"generate recontext prompt {args.validation_prompt_style}")
             generate_save_img(args, pipeline, args.validation_prompt_style, prompt_catogory)

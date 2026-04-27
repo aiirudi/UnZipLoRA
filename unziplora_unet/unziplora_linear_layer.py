@@ -23,12 +23,14 @@ class UnZipLoRALinearLayer(nn.Module):
         use_mask: bool = False,  # TFM 只在 cross-attention 的 to_k / to_v 上启用
         sig_type='last',
         use_base_weight=True,
+        with_svd_init: bool = True,
         **model_kwargs
     ):
         super().__init__()
 
         self.use_mask = use_mask
         self.use_base_weight = use_base_weight # 用来设置是否要减去初始权重
+        self.with_svd_init = with_svd_init # 是否启用随机矩阵svd分解初始化权重
 
         self.lora_matrix_dic = nn.ModuleDict() # 用于存储LoRA 的矩阵。每个key是一个矩阵的名称， value 则是存储的矩阵
         self.fixed_matrix = {} 
@@ -48,8 +50,13 @@ class UnZipLoRALinearLayer(nn.Module):
             self.lora_matrix_dic[f"{key}_up"] = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
             # setattr(self, f"merge_{key}", nn.Parameter(torch.ones((out_features,), device=device, dtype=dtype), requires_grad=True))
 
-            # 用 SVD 方式来初始化
-            self._init_weight_with_svd(in_features, out_features, rank, key, sig_type, device, dtype)
+            if self.with_svd_init:
+                # 用 SVD 方式来初始化
+                self._init_weight_with_svd(in_features, out_features, rank, key, sig_type, device, dtype)
+            else:
+                nn.init.normal_(self.lora_matrix_dic[f"{key}_down"].weight, std=1 / rank)
+                nn.init.normal_(self.lora_matrix_dic[f"{key}_up"].weight, std=1 / rank)
+            self._save_base_weight(key)
 
             self.lora_matrix_dic_norm[f"{key}_norm_down"] = torch.norm(self.lora_matrix_dic[f"{key}_down"].weight.detach(), dim=0, keepdim=True)
             self.lora_matrix_dic_norm[f"{key}_norm_up"] = torch.norm(self.lora_matrix_dic[f"{key}_up"].weight.detach(), dim=0, keepdim=True)
@@ -103,6 +110,9 @@ class UnZipLoRALinearLayer(nn.Module):
 
         del u, s, v, base_m
 
+
+    
+    def _save_base_weight(self, key):
         # 保存初始化的base权重，不需要梯度
         self.base_lora_matrix_dic[f"{key}_down"] = nn.Parameter(
             self.lora_matrix_dic[f"{key}_down"].weight.detach().clone(), requires_grad=False
@@ -110,9 +120,9 @@ class UnZipLoRALinearLayer(nn.Module):
         self.base_lora_matrix_dic[f"{key}_up"] = nn.Parameter(
             self.lora_matrix_dic[f"{key}_up"].weight.detach().clone(), requires_grad=False
         )
-
         for param in self.parameters():
             param.data = param.data.contiguous()
+        
 
     @classmethod
     def set_content_mask(cls, mask: Optional[torch.Tensor]) -> None:

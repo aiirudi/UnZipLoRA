@@ -1,11 +1,15 @@
 export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 export RANK=64
 export NUM=1
+export TIMESTEP_MODE="priecewise"
+
 
 # 训练输出前缀
 export OUTPUT_DIR="models/sketch_cat/sketch_cat" 
 #保存图片路径
 export SAVE_DIR="output/sketch_rose/"
+
+
 
 export VALID_PROMPTS=(
   "a monadikos rose on a skateboard in sketch style"
@@ -17,23 +21,6 @@ export VALID_PROMPT
 export VALID_STYLES=(
   "a rose on a skateboard in sketch style"
   "a rose in a snowy landscape in sketch style"
-  "a rose on a wooden table in sketch style"
-
-  "a deer on a skateboard in sketch style"
-  "a deer in a snowy landscape in sketch style"
-  "a deer on a wooden table in sketch style"
-
-  "a dog on a skateboard in sketch style"
-  "a dog in a snowy landscape in sketch style"
-  "a dog on a wooden table in sketch style"
-
-  "a chair on a skateboard in sketch style"
-  "a teapot in a snowy landscape in sketch style"
-  "a bicycle on a wooden table in sketch style"
-
-  "a robot in sketch style"
-  "a cow in sketch style"
-  "a book in sketch style"
 )
 
 VALID_STYLE=$(IFS=,; echo "${VALID_STYLES[*]}")
@@ -70,5 +57,11 @@ accelerate launch infer.py \
   --validation_prompt_style="${VALID_STYLE_PROMPT}" \
   --validation_prompt="${VALID_PROMPT}" \
   --validation_prompt_style_forward="${VALID_STYLE}" \
-  --validation_prompt_content_forward="${VALID_CONTENT}" 
-
+  --validation_prompt_content_forward="${VALID_CONTENT}" \
+  --with_svd_init="true" \
+  --use_base_weight="true" \
+  --alpha=1.0 \
+  --min_rank_content=32 \
+  --min_rank_style=24 \
+  --timestep_mode="${TIMESTEP_MODE}" \
+  --use_time_control="true"

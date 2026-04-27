@@ -888,6 +888,7 @@ def parse_args(input_args=None):
     parser.add_argument("--entity", type=str, default="changln")
     parser.add_argument("--wandb_dir", type=str, default=None)
 
+
     # 热力图参数
     parser.add_argument("--content_rare_word", type=str,default="",help="The content rare word to be used for cross attention regularization.",)
     parser.add_argument("--class_word",type=str,default="",help="The class word to be used for cross attention regularization.",
@@ -920,6 +921,7 @@ def parse_args(input_args=None):
     parser.add_argument("--gsa_loss_weight", type=float, default=1.0, help='gsa 损失权重。')
 
     # 随机矩阵svd分解初始化
+    parser.add_argument("--with_svd_init",type=str2bool, default="true", help="是否使用随机矩阵svd分解初始化权重;关闭是使用nn.Linear默认初始化")
     parser.add_argument("--sig_type",type=str,default="last",help="随机矩阵svd分解初始化方式") 
     parser.add_argument("--use_base_weight",type=str2bool,default="true",help="推理过程中减去随机矩阵svd分解初始化方式") 
 
@@ -1445,7 +1447,8 @@ def main(args):
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
                 sig_type=args.sig_type,
-                use_base_weight=args.use_base_weight
+                use_base_weight=args.use_base_weight,
+                with_svd_init=args.with_svd_init,
             )
         )
         attn_module.to_k.set_lora_layer(
@@ -1459,7 +1462,8 @@ def main(args):
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
                 sig_type=args.sig_type,
-                use_base_weight=args.use_base_weight
+                use_base_weight=args.use_base_weight,
+                with_svd_init=args.with_svd_init,
             )
         )
         attn_module.to_v.set_lora_layer(
@@ -1473,7 +1477,8 @@ def main(args):
                 lora_matrix_key = ["content", "style"],
                 use_mask=is_cross,
                 sig_type=args.sig_type,
-                use_base_weight=args.use_base_weight
+                use_base_weight=args.use_base_weight,
+                with_svd_init=args.with_svd_init,
             )
         )
         attn_module.to_out[0].set_lora_layer(
@@ -1487,10 +1492,10 @@ def main(args):
                 lora_matrix_key = ["content", "style"],
                 use_mask=False,
                 sig_type=args.sig_type,
-                use_base_weight=args.use_base_weight
+                use_base_weight=args.use_base_weight,
+                with_svd_init=args.with_svd_init,
             )
         )
-
 
         # TODO: Only for content and style
         def collect_params(lora_module, parameters, model_key=None):
@@ -3049,7 +3054,7 @@ def main(args):
             del text_encoder_lora_layers, text_encoder_2_lora_layers
 
         # Final inference
-        # Load previous pipeline
+        # Load previous pipeline  
         vae = AutoencoderKL.from_pretrained(
             vae_path,
             subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
@@ -3067,6 +3072,7 @@ def main(args):
             timestep_mode=args.timestep_mode,
             use_time_control=args.use_time_control,
             use_base_weight=args.use_base_weight,
+
         )
 
         # load attention processors
@@ -3082,7 +3088,6 @@ def main(args):
         saved_images = []
         if args.validation_content and args.validation_style and args.num_validation_images > 0:
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
-            
             # 生成推理图片
             images, image_list, heatmap_panels = log_validation(
                 pipeline,
@@ -3111,33 +3116,31 @@ def main(args):
 
         # 只在有 content_prompt 下生成图片
         if args.validation_prompt_content and args.num_validation_images > 0:
-            
-            # 自定义管道类,想对加载单LoRA 时也采用时间步
-            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                vae=vae,
-                revision=args.revision,
-                torch_dtype=weight_dtype,
-                max_rank=args.rank,
-                min_rank=args.min_rank_content,
-                alpha=args.alpha,
-                branch="content",
-                timestep_mode=args.timestep_mode,
-                use_time_control=args.use_time_control,
-                use_base_weight=args.use_base_weight
-            )
-            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
-            base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
-            
-            """
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                vae=vae,
-                revision=args.revision,
-                torch_dtype=weight_dtype,
-            )
-            pipeline.load_lora_weights(f"{args.output_dir}_content")
-            """
+            if args.with_svd_init:
+                # 自定义管道类,想对加载单LoRA 时也采用时间步
+                pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
+                    args.pretrained_model_name_or_path,
+                    vae=vae,
+                    revision=args.revision,
+                    torch_dtype=weight_dtype,
+                    max_rank=args.rank,
+                    min_rank=args.min_rank_content,
+                    alpha=args.alpha,
+                    branch="content",
+                    timestep_mode=args.timestep_mode,
+                    use_time_control=args.use_time_control,
+                    use_base_weight=args.use_base_weight
+                )
+                pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
+                base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
+            else:
+                pipeline = StableDiffusionXLPipeline.from_pretrained(
+                    args.pretrained_model_name_or_path,
+                    vae=vae,
+                    revision=args.revision,
+                    torch_dtype=weight_dtype,
+                )
+                pipeline.load_lora_weights(f"{args.output_dir}_content")
 
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
@@ -3165,35 +3168,33 @@ def main(args):
             saved_images += images
         
         # 只在有 style_prompt 下生成图片
-        if args.validation_prompt_style and args.num_validation_images > 0:
-            
+        if args.validation_prompt_style and args.num_validation_images > 0:       
             # 自定义管道类,想对加载单LoRA 时也采用时间步
-            pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                vae=vae,
-                revision=args.revision,
-                torch_dtype=weight_dtype,
-                max_rank=args.rank,
-                min_rank=args.min_rank_style,
-                alpha=args.alpha,
-                branch="style",
-                timestep_mode=args.timestep_mode,
-                use_time_control=args.use_time_control,
-                use_base_weight=args.use_base_weight,
-            )
-            pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_style", rank=args.rank, use_base_weight=args.use_base_weight,
-            base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
-
-        
-            """
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                vae=vae,
-                revision=args.revision,
-                torch_dtype=weight_dtype,
-            )
-            pipeline.load_lora_weights(f"{args.output_dir}_style")
-            """
+            if args.with_svd_init:
+                pipeline = StableDiffusionXLSingleLoRAPipeline.from_pretrained(
+                    args.pretrained_model_name_or_path,
+                    vae=vae,
+                    revision=args.revision,
+                    torch_dtype=weight_dtype,
+                    max_rank=args.rank,
+                    min_rank=args.min_rank_style,
+                    alpha=args.alpha,
+                    branch="style",
+                    timestep_mode=args.timestep_mode,
+                    use_time_control=args.use_time_control,
+                    use_base_weight=args.use_base_weight,
+                )
+                pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_style", rank=args.rank, use_base_weight=args.use_base_weight,
+                base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
+            else:
+                pipeline = StableDiffusionXLPipeline.from_pretrained(
+                    args.pretrained_model_name_or_path,
+                    vae=vae,
+                    revision=args.revision,
+                    torch_dtype=weight_dtype,
+                )
+                pipeline.load_lora_weights(f"{args.output_dir}_style")
+                
             pipeline = pipeline.to(accelerator.device, dtype=weight_dtype)
             
             images, image_list, heatmap_panels = log_validation(
