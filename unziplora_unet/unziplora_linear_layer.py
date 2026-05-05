@@ -428,13 +428,21 @@ class UnZipLoRALinearLayer(nn.Module):
         the weight depend on soft mask self.merge and hard mask(bor block separation) self.mask
         if set forward type as both: content and style are used
         '''
+        dtype = self.lora_matrix_dic["content_down"].weight.dtype
+        device = hidden_states_content.device
+
         if sigma_mask_content is None:
-            sigma_mask_content = torch.ones((1, self.rank)).to(hidden_states_content.device)
+            sigma_mask_content = torch.ones((1, self.rank), device=device, dtype=dtype)
+        else:
+            sigma_mask_content = sigma_mask_content.to(device=device, dtype=dtype)
         
         if sigma_mask_style is None:
             sigma_mask_style = copy.deepcopy(sigma_mask_content)
+        else:
+            sigma_mask_style = sigma_mask_style.to(device=device, dtype=dtype)
 
-        dtype = self.dtype
+        merge_content = self.merge_content.to(device=device, dtype=dtype)
+        merge_style = self.merge_style.to(device=device, dtype=dtype)
     
         # 对于
         if self.forward_type == "both":
@@ -446,13 +454,13 @@ class UnZipLoRALinearLayer(nn.Module):
             
 
             # 对 content_lora_weight 使用 软mask
-            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * sigma_mask_content
-            U_content = self.lora_matrix_dic["content_up"].weight.T 
+            D_content = self.lora_matrix_dic["content_down"].weight.T.to(dtype) * merge_content * sigma_mask_content
+            U_content = self.lora_matrix_dic["content_up"].weight.T.to(dtype) 
             
             
             # 加入初始化权重矩阵
-            D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
-            U_content_base = self.base_lora_matrix_dic["content_up"].T
+            D_content_base = self.base_lora_matrix_dic["content_down"].T.to(dtype) * merge_content * sigma_mask_content
+            U_content_base = self.base_lora_matrix_dic["content_up"].T.to(dtype)
 
             # 如果硬 mask 开启，则再乘上 硬mask
             if self.masked_matrix["content"] is True:
@@ -477,11 +485,11 @@ class UnZipLoRALinearLayer(nn.Module):
 
 
             # 和上段同理，这里就是变成了对 style_lora_weight操作而已
-            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * sigma_mask_style
-            U_style = self.lora_matrix_dic["style_up"].weight.T 
+            D_style = self.lora_matrix_dic["style_down"].weight.T.to(dtype) * merge_style * sigma_mask_style
+            U_style = self.lora_matrix_dic["style_up"].weight.T.to(dtype) 
             
-            D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_content * sigma_mask_content
-            U_style_base = self.base_lora_matrix_dic["style_up"].T
+            D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merge_content * sigma_mask_content
+            U_style_base = self.base_lora_matrix_dic["style_up"].T.to(dtype)
 
             if self.masked_matrix["style"] is True: 
                 D_style *= self.mask_style
@@ -500,11 +508,11 @@ class UnZipLoRALinearLayer(nn.Module):
         if self.forward_type == "content":
             orig_dtype = hidden_states_content.dtype
 
-            D_content = self.lora_matrix_dic["content_down"].weight.T * self.merge_content * sigma_mask_content
-            U_content = self.lora_matrix_dic["content_up"].weight.T
+            D_content = self.lora_matrix_dic["content_down"].weight.T.to(dtype) * merge_content * sigma_mask_content
+            U_content = self.lora_matrix_dic["content_up"].weight.T.to(dtype)
 
-            D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
-            U_content_base = self.base_lora_matrix_dic["content_up"].T
+            D_content_base = self.base_lora_matrix_dic["content_down"].T.to(dtype) * merge_content * sigma_mask_content
+            U_content_base = self.base_lora_matrix_dic["content_up"].T.to(dtype)
 
             if self.masked_matrix["content"] is True:
                 D_content = D_content * self.mask_content
@@ -529,11 +537,11 @@ class UnZipLoRALinearLayer(nn.Module):
         if self.forward_type == "style":
             orig_dtype = hidden_states_style.dtype
 
-            D_style = self.lora_matrix_dic["style_down"].weight.T * self.merge_style * sigma_mask_style
-            U_style = self.lora_matrix_dic["style_up"].weight.T
+            D_style = self.lora_matrix_dic["style_down"].weight.T.to(dtype) * merge_style * sigma_mask_style
+            U_style = self.lora_matrix_dic["style_up"].weight.T.to(dtype)
 
-            D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
-            U_style_base = self.base_lora_matrix_dic["style_up"].T
+            D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merge_style * sigma_mask_style
+            U_style_base = self.base_lora_matrix_dic["style_up"].T.to(dtype)
 
             if self.masked_matrix["style"] is True:
                 D_style = D_style * self.mask_style
@@ -602,15 +610,20 @@ class UnZipLoRALinearLayerInfer(nn.Module):
         self.forward_type = type
 
     def forward(self, hidden_states_content: torch.Tensor, hidden_states_style: torch.Tensor=None, sigma_mask_content=None, sigma_mask_style=None) -> torch.Tensor:
-        dtype = self.dtype
-        merged_content = self.merge_content
-        merged_style = self.merge_style
+        dtype = self.lora_matrix_dic["content_down"].weight.dtype
+        device = hidden_states_content.device
+        merged_content = self.merge_content.to(device=device, dtype=dtype)
+        merged_style = self.merge_style.to(device=device, dtype=dtype)
         
         if sigma_mask_content is None:
-            sigma_mask_content = torch.ones((1, self.rank)).to(hidden_states_content.device)
+            sigma_mask_content = torch.ones((1, self.rank), device=device, dtype=dtype)
+        else:
+            sigma_mask_content = sigma_mask_content.to(device=device, dtype=dtype)
         
         if sigma_mask_style is None:
             sigma_mask_style = copy.deepcopy(sigma_mask_content)
+        else:
+            sigma_mask_style = sigma_mask_style.to(device=device, dtype=dtype)
 
         if self.forward_type == "both":
             orig_dtype = hidden_states_content.dtype
@@ -618,13 +631,13 @@ class UnZipLoRALinearLayerInfer(nn.Module):
             if hidden_states_style is None: 
                 hidden_states_style = hidden_states_content
             if self.masked_matrix["content"] is True:
-                up_hidden_states_content = torch.zeros((hidden_states_content.shape[0], hidden_states_content.shape[1], self.out_features)).to(hidden_states_content.device)
+                up_hidden_states_content = torch.zeros((hidden_states_content.shape[0], hidden_states_content.shape[1], self.out_features), device=hidden_states_content.device, dtype=dtype)
             else: 
-                D_content = self.lora_matrix_dic["content_down"].weight.T * merged_content * sigma_mask_content
-                U_content = self.lora_matrix_dic["content_up"].weight.T 
+                D_content = self.lora_matrix_dic["content_down"].weight.T.to(dtype) * merged_content * sigma_mask_content
+                U_content = self.lora_matrix_dic["content_up"].weight.T.to(dtype) 
 
-                D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
-                U_content_base = self.base_lora_matrix_dic["content_up"].T
+                D_content_base = self.base_lora_matrix_dic["content_down"].T.to(dtype) * merged_content * sigma_mask_content
+                U_content_base = self.base_lora_matrix_dic["content_up"].T.to(dtype)
 
                 if self.use_base_weight:
                     masked_content_weight = D_content @ U_content - D_content_base @ U_content_base
@@ -634,13 +647,13 @@ class UnZipLoRALinearLayerInfer(nn.Module):
                 up_hidden_states_content = hidden_states_content.to(dtype) @ masked_content_weight
             
             if self.masked_matrix["style"] is True: 
-                up_hidden_states_style = torch.zeros((hidden_states_style.shape[0], hidden_states_style.shape[1], self.out_features)).to(hidden_states_style.device)
+                up_hidden_states_style = torch.zeros((hidden_states_style.shape[0], hidden_states_style.shape[1], self.out_features), device=hidden_states_style.device, dtype=dtype)
             else: 
-                D_style = self.lora_matrix_dic["style_down"].weight.T * merged_style * sigma_mask_style
-                U_style = self.lora_matrix_dic["style_up"].weight.T 
+                D_style = self.lora_matrix_dic["style_down"].weight.T.to(dtype) * merged_style * sigma_mask_style
+                U_style = self.lora_matrix_dic["style_up"].weight.T.to(dtype) 
                 
-                D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
-                U_style_base = self.base_lora_matrix_dic["style_up"].T
+                D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merged_style * sigma_mask_style
+                U_style_base = self.base_lora_matrix_dic["style_up"].T.to(dtype)
                 
                 if self.use_base_weight:
                     masked_style_weight = D_style @ U_style - D_style_base @ U_style_base
@@ -653,13 +666,13 @@ class UnZipLoRALinearLayerInfer(nn.Module):
         if self.forward_type == "content":
             orig_dtype = hidden_states_content.dtype
             if self.masked_matrix["content"] is True:
-                up_hidden_states_content = torch.zeros((hidden_states_content.shape[0], hidden_states_content.shape[1], self.out_features)).to(hidden_states_content.device)
+                up_hidden_states_content = torch.zeros((hidden_states_content.shape[0], hidden_states_content.shape[1], self.out_features), device=hidden_states_content.device, dtype=dtype)
             else: 
-                D_content = self.lora_matrix_dic["content_down"].weight.T * merged_content * sigma_mask_content
-                U_content = self.lora_matrix_dic["content_up"].weight.T 
+                D_content = self.lora_matrix_dic["content_down"].weight.T.to(dtype) * merged_content * sigma_mask_content
+                U_content = self.lora_matrix_dic["content_up"].weight.T.to(dtype) 
 
-                D_content_base = self.base_lora_matrix_dic["content_down"].T * self.merge_content * sigma_mask_content
-                U_content_base = self.base_lora_matrix_dic["content_up"].T
+                D_content_base = self.base_lora_matrix_dic["content_down"].T.to(dtype) * merged_content * sigma_mask_content
+                U_content_base = self.base_lora_matrix_dic["content_up"].T.to(dtype)
 
                 if self.use_base_weight:
                     masked_content_weight = D_content @ U_content - D_content_base @ U_content_base
@@ -671,13 +684,13 @@ class UnZipLoRALinearLayerInfer(nn.Module):
         if self.forward_type == "style":
             orig_dtype = hidden_states_style.dtype
             if self.masked_matrix["style"] is True: 
-                up_hidden_states_style = torch.zeros((hidden_states_style.shape[0], hidden_states_style.shape[1], self.out_features)).to(hidden_states_style.device)
+                up_hidden_states_style = torch.zeros((hidden_states_style.shape[0], hidden_states_style.shape[1], self.out_features), device=hidden_states_style.device, dtype=dtype)
             else: 
-                D_style = self.lora_matrix_dic["style_down"].weight.T * merged_style * sigma_mask_style
-                U_style = self.lora_matrix_dic["style_up"].weight.T 
+                D_style = self.lora_matrix_dic["style_down"].weight.T.to(dtype) * merged_style * sigma_mask_style
+                U_style = self.lora_matrix_dic["style_up"].weight.T.to(dtype) 
                 
-                D_style_base = self.base_lora_matrix_dic["style_down"].T * self.merge_style * sigma_mask_style
-                U_style_base = self.base_lora_matrix_dic["style_up"].T
+                D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merged_style * sigma_mask_style
+                U_style_base = self.base_lora_matrix_dic["style_up"].T.to(dtype)
                 
                 if self.use_base_weight:
                     masked_style_weight = D_style @ U_style - D_style_base @ U_style_base

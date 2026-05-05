@@ -5,8 +5,7 @@ from diffusers.models.lora import LoRACompatibleLinear, LoRALinearLayer
 from torch import nn 
 import torch.nn.functional as F
 
-from typing import Union
-
+from typing import Union,ClassVar,Optional
 
 class LoRALinearLayer(nn.Module):
     r"""
@@ -29,6 +28,8 @@ class LoRALinearLayer(nn.Module):
             The dtype to use for the layer's weights.
     """
 
+    _active_mask_content: ClassVar[Optional[torch.Tensor]] = None
+
     def __init__(
         self,
         in_features: int,
@@ -38,8 +39,11 @@ class LoRALinearLayer(nn.Module):
         device: Optional[Union[torch.device, str]] = None,
         dtype: Optional[torch.dtype] = None,
         use_base_weight: bool = False,
+        use_mask: bool = False,
     ):
         super().__init__()
+        # 加入 TFM 的 mask
+        self.use_mask = use_mask
 
         self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
         self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
@@ -56,6 +60,10 @@ class LoRALinearLayer(nn.Module):
 
         nn.init.normal_(self.down.weight, std=1 / rank)
         nn.init.zeros_(self.up.weight)
+
+    @classmethod
+    def set_content_mask(cls, mask: Optional[torch.Tensor]) -> None:
+        cls._active_mask_content = mask
 
     def forward(self, hidden_states: torch.Tensor, sigma_mask=None) -> torch.Tensor:
         if sigma_mask is None:
@@ -74,6 +82,9 @@ class LoRALinearLayer(nn.Module):
             base_up_out = F.linear(base_down_out, self.base_up)
             up_hidden_states = up_hidden_states - base_up_out
         
+        if self.use_mask and LoRALinearLayer._active_mask_content is not None:
+            mask = LoRALinearLayer._active_mask_content.to(up_hidden_states.dtype)
+            up_hidden_states = up_hidden_states * mask
 
         if self.network_alpha is not None:
             up_hidden_states *= self.network_alpha / self.rank
@@ -90,6 +101,7 @@ class LoRACrossAttnProcessor(nn.Module):
         rank=4,
         network_alpha=None,
         use_base_weight: bool = False,
+        use_mask: bool = False,
     ):
         super().__init__()
 
@@ -102,6 +114,7 @@ class LoRACrossAttnProcessor(nn.Module):
             rank,
             network_alpha=network_alpha,
             use_base_weight=use_base_weight,
+            use_mask=False,
         )
         self.to_k_lora = lora_linear_layer(
             cross_attention_dim or hidden_size,
@@ -109,6 +122,7 @@ class LoRACrossAttnProcessor(nn.Module):
             rank,
             network_alpha=network_alpha,
             use_base_weight=use_base_weight,
+            use_mask=use_mask,
         )
         self.to_v_lora = lora_linear_layer(
             cross_attention_dim or hidden_size,
@@ -116,6 +130,7 @@ class LoRACrossAttnProcessor(nn.Module):
             rank,
             network_alpha=network_alpha,
             use_base_weight=use_base_weight,
+            use_mask=use_mask,
         )
         self.to_out_lora = lora_linear_layer(
             hidden_size,
@@ -123,6 +138,7 @@ class LoRACrossAttnProcessor(nn.Module):
             rank,
             network_alpha=network_alpha,
             use_base_weight=use_base_weight,
+            use_mask=False,
         )
 
     def _load_single_lora_layer(

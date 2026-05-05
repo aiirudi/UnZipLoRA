@@ -3,46 +3,59 @@ export RANK=64
 export NUM=1
 export TIMESTEP_MODE="priecewise"
 
+export content_dir="kid_crayon_bear"
+export content_name="bear"
+export style_name="kid crayon drawing style"
 
 # 训练输出前缀
-export OUTPUT_DIR="models/sketch_cat/sketch_cat" 
+export OUTPUT_DIR="models/${content_dir}/${content_dir}" 
 #保存图片路径
-export SAVE_DIR="output/sketch_rose/"
+export SAVE_DIR="output/${content_dir}/"
 
+# 模块启动参数配置
+#for controlling block effect
+# TFM (Token Focus Masking)
+export focus_value="true"
+# random matrix svd init
+export with_svd_init_value="false"
+# subb init value
+export use_base_weight_value="false"
+#unsymmetrical time control mask
+export use_time_control_value="false"
 
 
 export VALID_PROMPTS=(
-  "a monadikos rose on a skateboard in sketch style"
-  "a monadikos rose in a snowy landscape in sketch style"
+  "a sks ${content_name} on a skateboard in ${style_name}"
+  "a sks ${content_name} in a snowy landscape in ${style_name}"
 )
 VALID_PROMPT=$(IFS=,; echo "${VALID_PROMPTS[*]}")
 export VALID_PROMPT
 
 export VALID_STYLES=(
-  "a rose on a skateboard in sketch style"
-  "a rose in a snowy landscape in sketch style"
+  "a ${content_name} on a skateboard in ${style_name}"
+  "a ${content_name} in a snowy landscape in ${style_name}"
 )
 
 VALID_STYLE=$(IFS=,; echo "${VALID_STYLES[*]}")
 export VALID_STYLE
 
 export VALID_CONTENTS=(
-  "a monadikos rose on a skateboard"
-  "a monadikos rose in a snowy landscape"
+  "a sks ${content_name} on a skateboard"
+  "a sks ${content_name} in a snowy landscape"
 )
 VALID_CONTENT=$(IFS=,; echo "${VALID_CONTENTS[*]}")
 export VALID_CONTENT
 
 export VALID_CONTENT_RECON_PROMPTS=(
-  "A photo of monadikos rose on a table"
-  "A photo of monadikos rose in a beach"
+  "A photo of sks ${content_name} on a table"
+  "A photo of sks ${content_name} in a beach"
 )
 VALID_CONTENT_RECON_PROMPT=$(IFS=,; echo "${VALID_CONTENT_RECON_PROMPTS[*]}")
 export VALID_CONTENT_RECON_PROMPT
 
 export VALID_STYLE_PROMPTS=(
-  "A dog in sketch style"
-  "A chair in sketch style"
+  "A dog in ${style_name}"
+  "A chair in ${style_name}"
 )
 VALID_STYLE_PROMPT=$(IFS=,; echo "${VALID_STYLE_PROMPTS[*]}")
 export VALID_STYLE_PROMPT
@@ -58,10 +71,12 @@ accelerate launch infer.py \
   --validation_prompt="${VALID_PROMPT}" \
   --validation_prompt_style_forward="${VALID_STYLE}" \
   --validation_prompt_content_forward="${VALID_CONTENT}" \
-  --with_svd_init="true" \
-  --use_base_weight="true" \
+  --with_svd_init="${with_svd_init_value}" \
+  --use_base_weight="${use_base_weight_value}" \
   --alpha=1.0 \
+  --focus_value="${focus_value}" \
+  --content_rare_word="sks" \
   --min_rank_content=32 \
   --min_rank_style=24 \
   --timestep_mode="${TIMESTEP_MODE}" \
-  --use_time_control="true"
+  --use_time_control="${use_time_control_value}"

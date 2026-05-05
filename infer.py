@@ -2,6 +2,8 @@ import argparse
 import torch 
 import os
 
+from typing import Optional
+
 from diffusers import (
     AutoencoderKL,
     StableDiffusionXLPipeline,
@@ -25,6 +27,30 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+def build_inference_mask(args, pipe, rare_token=None, device="cpu"):
+    prompts = [args.prompt]  
+    def _mask_for_tokenizer(tokenizer, rare_token):
+                                                             
+        if rare_token is not None:
+            mask = build_token_masks(
+                tokenizer, 
+                prompts,
+                rare_word=rare_token,
+                device=device,
+            )
+        return mask
+
+    if args.pretrained_model_name_or_path == "stabilityai/stable-diffusion-v1-5":
+        mask = _mask_for_tokenizer(pipe.tokenizer, rare_token)
+        mask = mask.unsqueeze(-1)  
+        return mask
+    else:
+        mask1 = _mask_for_tokenizer(pipe.tokenizer, rare_token)
+        mask2 = _mask_for_tokenizer(pipe.tokenizer_2, rare_token)
+        mask = mask1 | mask2
+        mask = mask.unsqueeze(-1)
+        return mask
 
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -90,10 +116,22 @@ def parse_args(input_args=None):
         default=4,
         help=("The dimension of the LoRA update matrices."),
     )
-    parser.add_argument(
-
-    )
     
+    # TFM rare token 参数
+    parser.add_argument(
+        "--focus_value",
+        type=str2bool,
+        default="false",
+        help=("是否启用 TFM mask 的值"),
+    )
+    parser.add_argument(
+        "--content_rare_word",
+        type=str,
+        default="",
+        help=("rare token used for inference TFM mask"),
+    )
+
+
     # 随机矩阵svd初始化
     parser.add_argument(
         "--use_base_weight",
@@ -114,16 +152,18 @@ def parse_args(input_args=None):
     
     return args 
 
-def log_validation(pipeline, prompt, prompt_content="", prompt_style="", seed=0, num=4):
+def log_validation(pipeline, prompt, prompt_content="", prompt_style="", content_rare_word: Optional[str]=None,seed=0, num=4):
     generator = torch.Generator(device=device).manual_seed(seed)
     # Currently the context determination is a bit hand-wavy. We can improve it in the future if there's a better
     # way to condition it. Reference: https://github.com/huggingface/diffusers/pull/7126#issuecomment-1968523051
     if pipeline.__class__.__name__ == 'StableDiffusionXLUnZipLoRAPipeline':
         pipeline_args = {"prompt": prompt, 
                         "prompt_content": prompt_content, 
-                        "prompt_style": prompt_style}
+                        "prompt_style": prompt_style,
+                        "content_rare_word":content_rare_word}
     else: 
-        pipeline_args = {"prompt": prompt}
+        pipeline_args = {"prompt": prompt,
+                        "content_rare_word":content_rare_word}
         
     images = [pipeline(**pipeline_args, generator=generator, num_inference_steps=50).images[0] for _ in range(num)]
     return images
@@ -150,6 +190,7 @@ def generate_save_img(args, pipeline, prompt, prompt_catogory, prompt_content_fo
                     prompt[i],
                     prompt_content_forward[i],
                     prompt_style_forward[i],
+                    content_rare_word=args.content_rare_word if args.focus_value else None,
                     seed = seed, 
                     num = args.num
                 )
@@ -158,14 +199,14 @@ def generate_save_img(args, pipeline, prompt, prompt_catogory, prompt_content_fo
                     pipeline,
                     prompt[i],
                     seed = seed, 
-                    num = args.num
+                    num = args.num,
+                    content_rare_word=args.content_rare_word if args.focus_value else None,
                 )
             img_num = save_img(prompt_dir, images, img_num)
 
 def main(args):
     os.makedirs(args.save_dir, exist_ok=True)
     with torch.no_grad():
-        
         
         # * Generate combined images
         vae = AutoencoderKL.from_pretrained( #载入vae
@@ -208,9 +249,14 @@ def main(args):
             pipeline = pipeline.to(device, dtype=weight_dtype)
             prompt_catogory = os.path.join(args.save_dir, "combine_recontextual_outputs")
             os.makedirs(prompt_catogory, exist_ok=True)
+            
+            # 在推理过程中为 content prompt 分支加上 TFM
+
+
             if args.with_unziplora:
                 generate_save_img(args, pipeline, args.validation_prompt, prompt_catogory, \
-                    args.validation_prompt_content_forward, args.validation_prompt_style_forward)
+                    args.validation_prompt_content_forward, 
+                    args.validation_prompt_style_forward)
             else:
                 generate_save_img(args, pipeline, args.validation_prompt, prompt_catogory)
             
@@ -238,7 +284,7 @@ def main(args):
                 pipeline.setup_lora_layers(lora_path=f"{args.output_dir}_content", rank=args.rank, use_base_weight=args.use_base_weight,
                 base_weight_path=f"{args.output_dir}_base_weight_content.pth",branch="content")
             else:
-                pipeline = StableDiffusionXLPipeline.from_pretrained(model_id,)
+                pipeline = StableDiffusionXLPipeline.from_pretrained(MODEL_ID,)
                 pipeline.load_lora_weights(f"{args.output_dir}_content")
             pipeline = pipeline.to(device, dtype=weight_dtype)
 
@@ -271,7 +317,7 @@ def main(args):
                 base_weight_path=f"{args.output_dir}_base_weight_style.pth",branch="style")
             else:
                 pipeline = StableDiffusionXLPipeline.from_pretrained(
-                model_id,
+                MODEL_ID,
                 )
                 pipeline.load_lora_weights(f"{args.output_dir}_style")
             

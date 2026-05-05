@@ -1,10 +1,12 @@
 export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 
 #heatmap parameter
-CONTENT_RARE_TOKEN="monadikos"          # 例如：xlo
-CLASS_WORD="cat"          # 例如：dog
-STYLE_RARE_TOKEN="anime"
+CONTENT_RARE_TOKEN="sks"          # 例如：xlo
 SUPER_WORD='dog'
+
+export content_dir="isometric_lighthouse"
+export content_name="lighthouse"
+export style_name="isometric illustration style"
 
 TIMESTEP_MODE='priecewise'
 
@@ -18,31 +20,47 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora-改进tlora中的非对称时间步策略"
-export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/anime_cat"
-export OUTPUT_DIR="models/anime_cat/anime_cat"
+export WANDB_NAME="unziplora+M1+M2"
+export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/${content_dir}"
+export OUTPUT_DIR="models/${content_dir}/${content_dir}"
 export STEPS=600
 # Training prompt 
 
 # both prompt
-export PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style"
+export PROMPT="A ${CONTENT_RARE_TOKEN} ${content_name} in ${style_name}"
 # content prompt 
-export CONTENT_FORWARD_PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD}" 
+export CONTENT_FORWARD_PROMPT="A ${CONTENT_RARE_TOKEN} ${content_name}" 
 # style prompt
-export STYLE_FORWARD_PROMPT="A ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style" 
+export STYLE_FORWARD_PROMPT="A ${content_name} in ${style_name}" 
 
 # For validation
-export VALID_CONTENT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table"
-export VALID_PROMPT="A ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table in ${STYLE_RARE_TOKEN} style"
-export VALID_STYLE="A ${CLASS_WORD} in ${STYLE_RARE_TOKEN} style on a table"
+export VALID_CONTENT="A ${CONTENT_RARE_TOKEN} ${content_name} on a table"
+export VALID_PROMPT="A ${CONTENT_RARE_TOKEN} ${content_name} on a table in ${style_name}"
+export VALID_STYLE="A ${content_name} in ${style_name} on a table"
 
 # for content validation
-export VALID_CONTENT_PROMPT="a photo of a ${CONTENT_RARE_TOKEN} ${CLASS_WORD} on a table"
+export VALID_CONTENT_PROMPT="a photo of a ${CONTENT_RARE_TOKEN} ${content_name} on a table"
 
 # for style validation
-export VALID_STYLE_PROMPT="A ${SUPER_WORD} in ${STYLE_RARE_TOKEN} style"
+export VALID_STYLE_PROMPT="A ${SUPER_WORD} in ${style_name}"
 
 export WANDB_PROJECT="unziplora"
+
+# 模块启动参数配置
+#for controlling block effect
+# TFM (Token Focus Masking)
+export focus_value="true"
+# TAL
+export align_loss_effect="true"
+#gsa loss
+export gsa_loss_effect="true"
+# random matrix svd init
+export with_svd_init_value="false"
+# subb init value
+export use_base_weight_value="false"
+#unsymmetrical time control mask
+export use_time_control_value="false"
+
 
 accelerate launch train_unziplora.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
@@ -76,22 +94,22 @@ accelerate launch train_unziplora.py \
   --column_ratio=$sampled_column_ratio \
   --entity="elysiaareudi-discord" \
   --content_rare_word="${CONTENT_RARE_TOKEN}" \
-  --class_word="${CLASS_WORD}" \
-  --style_rare_word="${STYLE_RARE_TOKEN}" \
+  --class_word="${content_name}" \
+  --style_rare_word="${style_name}" \
   --super_word="${SUPER_WORD}" \
   --heatmap_map_size=64 \
   --heatmap_alpha=0.45 \
   --heatmap_steps=100 \
-  --focus='true' \
-  --with_align_loss="true" \
+  --focus="${focus_value}" \
+  --with_align_loss="${align_loss_effect}" \
   --align_loss_weight=1.0 \
-  --with_gsa_loss="true" \
+  --with_gsa_loss="${gsa_loss_effect}" \
   --gsa_loss_weight=2.0 \
   --sig_type="last" \
-  --with_svd_init="true" \
-  --use_base_weight="true" \
+  --with_svd_init="${with_svd_init_value}" \
+  --use_base_weight="${use_base_weight_value}" \
   --alpha=1.0 \
   --min_rank_content=32 \
   --min_rank_style=24 \
   --timestep_mode="${TIMESTEP_MODE}" \
-  --use_time_control="true"
+  --use_time_control="${use_time_control_value}"

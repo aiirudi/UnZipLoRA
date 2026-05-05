@@ -30,6 +30,7 @@ from unziplora_unet.unet_2d_condition import UNet2DConditionModel
 from unziplora_unet.singlelora import LoRACrossAttnProcessor, LoRALinearLayer
 from safetensors.torch import load_file
 
+
 if is_invisible_watermark_available():
     from diffusers.pipelines.stable_diffusion_xl.watermark import StableDiffusionXLWatermarker
 
@@ -214,6 +215,7 @@ class StableDiffusionXLUnZipLoRAPipeline(
         clip_skip: Optional[int] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        content_rare_word: Optional[str] = None,
         **kwargs,
     ):
         r"""
@@ -461,6 +463,28 @@ class StableDiffusionXLUnZipLoRAPipeline(
                 lora_scale=lora_scale,
                 clip_skip=self.clip_skip,
             )
+
+            if content_rare_word is not None and content_rare_word != "":
+                from unziplora_unet.utils import build_token_masks
+                prompts_for_mask = prompt_content if isinstance(prompt_content, list) else [prompt_content]
+
+                rare_mask_1, _ = build_token_masks(
+                    self.tokenizer,
+                    prompts_for_mask,
+                    rare_word=content_rare_word,
+                    super_word="",
+                    device=device,
+                )
+                rare_mask_2, _ = build_token_masks(
+                    self.tokenizer_2,
+                    prompts_for_mask,
+                    rare_word=content_rare_word,
+                    super_word="",
+                    device=device,
+                )              
+                rare_mask = (rare_mask_1 | rare_mask_2).unsqueeze(-1).to(prompt_embeds_content.dtype)
+                prompt_embeds_content = prompt_embeds_content * rare_mask
+
         # * compute the embeddings for style prompt
         if prompt_style is not None:
             (
@@ -808,13 +832,15 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
                 hidden_size = self.unet.config.block_out_channels[block_id]
             else:
                 continue
-        
+
+            is_cross = not name.endswith("attn1.processor")
             lora_attn_procs[name] = LoRACrossAttnProcessor(
                 hidden_size=hidden_size,
                 cross_attention_dim=cross_attention_dim,
                 rank=rank,
                 lora_linear_layer=LoRALinearLayer,
                 use_base_weight=self.use_base_weight,
+                use_mask=is_cross,
             )
         self.unet.set_attn_processor(lora_attn_procs)
 
@@ -916,6 +942,7 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
         clip_skip=None,
         callback_on_step_end=None,
         callback_on_step_end_tensor_inputs=["latents"],
+        content_rare_word: Optional[str] = None,
         **kwargs,
     ):
         callback = kwargs.pop("callback", None)
@@ -971,6 +998,29 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
             lora_scale=lora_scale,
             clip_skip=self.clip_skip,
         )
+
+        if content_rare_word is not None and content_rare_word != "" and self.branch == "content":
+            from unziplora_unet.utils import build_token_masks
+            prompts_for_mask = prompt if isinstance(prompt, list) else [prompt]
+            rare_mask_1, _ = build_token_masks(
+                self.tokenizer,
+                prompts_for_mask,
+                rare_word=content_rare_word,
+                super_word="",
+                device=device,
+            )
+
+            rare_mask_2, _ = build_token_masks(
+                self.tokenizer_2,
+                prompts_for_mask,
+                rare_word=content_rare_word,
+                super_word="",
+                device=device,
+            )              
+            rare_mask = (rare_mask_1 | rare_mask_2).unsqueeze(-1).to(prompt_embeds.dtype)
+            LoRALinearLayer.set_content_mask(rare_mask) 
+        else:
+            LoRALinearLayer.set_content_mask(None)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(
@@ -1174,6 +1224,9 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
+
+        # 清除 LoRALinear Layer 的 TFM mask
+        LoRALinearLayer.set_content_mask(None)
 
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16

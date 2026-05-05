@@ -2001,14 +2001,14 @@ def main(args):
     if accelerator.is_main_process: # 这段代码的主要作用就是初始化 WandB 跟踪器
         config = vars(args)
         if args.wandb_dir is None:
-            accelerator.init_trackers("dreambooth-inzerse_ziplora_rank-sd-xl", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity
                     }
                 })
         else:
-            accelerator.init_trackers("dreambooth-inzerse_ziplora_rank-sd-xl", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity,
@@ -3096,7 +3096,7 @@ def main(args):
                 args.validation_prompt,
                 args.validation_prompt,
                 args.validation_prompt,
-                generate_heatmap=False,
+                generate_heatmap=True,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='content'
@@ -3149,7 +3149,7 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_content,
-                generate_heatmap=False,
+                generate_heatmap=True,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='content'
@@ -3202,7 +3202,7 @@ def main(args):
                 args,
                 accelerator,
                 args.validation_prompt_style,
-                generate_heatmap=False,
+                generate_heatmap=True,
                 tokenizer_one=tokenizer_one,
                 tokenizer_two=tokenizer_two,
                 heatmap_type='style'
