@@ -1,0 +1,79 @@
+{
+  "cartoon_starfish": {
+    "clipI_style": 0.6683,
+    "dino_content": 0.3874,
+    "csd_content": 0.431,
+    "csd_style": 0.5637,
+    "evaluated_at": "2026-05-30 01:58:16"
+  },
+  "cartoon_backpack": {
+    "clipI_style": 0.7303,
+    "dino_content": 0.3603,
+    "csd_content": 0.409,
+    "csd_style": 0.5623,
+    "evaluated_at": "2026-05-30 03:00:24"
+  },
+  "cartoon_hat": {
+    "clipI_style": 0.6772,
+    "dino_content": 0.3035,
+    "csd_content": 0.4665,
+    "csd_style": 0.5702,
+    "evaluated_at": "2026-05-30 04:08:06"
+  },
+  "line_art_kangaroo": {
+    "clipI_style": 0.7748,
+    "dino_content": 0.2564,
+    "csd_content": 0.5113,
+    "csd_style": 0.6656,
+    "evaluated_at": "2026-05-30 04:40:32"
+  },
+  "kid_crayon_bear": {
+    "clipI_style": 0.7353,
+    "dino_content": 0.2293,
+    "csd_content": 0.526,
+    "csd_style": 0.6292,
+    "evaluated_at": "2026-05-30 05:15:13"
+  },
+  "3d_rose": {
+    "clipI_style": 0.7747,
+    "dino_content": 0.2969,
+    "csd_content": 0.564,
+    "csd_style": 0.7552,
+    "evaluated_at": "2026-05-30 05:47:57"
+  },
+  "isometric_lighthouse": {
+    "clipI_style": 0.737,
+    "dino_content": 0.4763,
+    "csd_content": 0.5893,
+    "csd_style": 0.714,
+    "evaluated_at": "2026-05-30 06:20:01"
+  },
+  "graffiti_roket": {
+    "clipI_style": 0.7338,
+    "dino_content": 0.3209,
+    "csd_content": 0.4204,
+    "csd_style": 0.7742,
+    "evaluated_at": "2026-05-30 06:54:52"
+  },
+  "inpressionism_piano": {
+    "clipI_style": 0.7492,
+    "dino_content": 0.5474,
+    "csd_content": 0.4897,
+    "csd_style": 0.7628,
+    "evaluated_at": "2026-05-30 07:29:23"
+  },
+  "poster_helicopter": {
+    "clipI_style": 0.6779,
+    "dino_content": 0.5677,
+    "csd_content": 0.5293,
+    "csd_style": 0.6807,
+    "evaluated_at": "2026-05-30 08:02:48"
+  },
+  "isometric_baloon": {
+    "clipI_style": 0.7743,
+    "dino_content": 0.6029,
+    "csd_content": 0.6483,
+    "csd_style": 0.6923,
+    "evaluated_at": "2026-05-30 08:35:59"
+  }
+}

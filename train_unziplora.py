@@ -899,7 +899,6 @@ def parse_args(input_args=None):
     ) 
     parser.add_argument("--super_word",type=str,default="",help="The class word to be used for cross attention regularization.",
     ) 
-    parser.add_argument("--with_content_heatmap", action="store_true",help="Log content-only token heatmap during content validation.")
     parser.add_argument("--heatmap_steps", type=int, default=100,help="Run heatmap every N global steps. 0 disables cadence gate.")
     parser.add_argument(
         "--heatmap_map_size",
@@ -2217,6 +2216,14 @@ def main(args):
                 weight = weight_content
 
             content_out = content_inp @ weight
+
+            """
+            if module.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
+                content_out = content_out * UnZipLoRALinearLayer._active_mask_content.to(
+                    device=content_out.device,
+                    dtype=content_out.dtype
+                )
+            """
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
         return _hook
 

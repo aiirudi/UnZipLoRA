@@ -4,9 +4,9 @@ export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 CONTENT_RARE_TOKEN="sks"          # 例如：xlo
 SUPER_WORD='dog'
 
-export content_dir="isometric_lighthouse"
-export content_name="lighthouse"
-export style_name="isometric illustration style"
+export content_dir="${content_dir:-origami_sunflower}"
+export content_name="${content_name:-sunflower}"
+export style_name="${style_name:-origami style}"
 
 TIMESTEP_MODE='priecewise'
 
@@ -20,7 +20,7 @@ export STYLE_LR=0.00005
 export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
-export WANDB_NAME="unziplora+M1+M2"
+export WANDB_NAME="unziplora+M1+M2(fused)"
 export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/${content_dir}"
 export OUTPUT_DIR="models/${content_dir}/${content_dir}"
 export STEPS=600
@@ -98,13 +98,13 @@ accelerate launch train_unziplora.py \
   --style_rare_word="${style_name}" \
   --super_word="${SUPER_WORD}" \
   --heatmap_map_size=64 \
-  --heatmap_alpha=0.45 \
+  --heatmap_alpha=0.5 \
   --heatmap_steps=100 \
   --focus="${focus_value}" \
   --with_align_loss="${align_loss_effect}" \
-  --align_loss_weight=1.0 \
+  --align_loss_weight=0.2 \
   --with_gsa_loss="${gsa_loss_effect}" \
-  --gsa_loss_weight=2.0 \
+  --gsa_loss_weight=0.4 \
   --sig_type="last" \
   --with_svd_init="${with_svd_init_value}" \
   --use_base_weight="${use_base_weight_value}" \

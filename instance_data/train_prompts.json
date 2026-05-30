@@ -1,0 +1,202 @@
+[
+  {
+    "content_dir": "flat_cartoon_teapot",
+    "content_name": "teapot",
+    "style_name": "flat cartoon illustration style"
+  },
+  {
+    "content_dir": "cartoon_dog",
+    "content_name": "dog",
+    "style_name": "flat cartoon illustration style"
+  },
+  {
+    "content_dir": "watercolor_horse",
+    "content_name": "horse",
+    "style_name": "watercolor painting style"
+  },
+  {
+    "content_dir": "sketch_cat",
+    "content_name": "cat",
+    "style_name": "sketch style"
+  },
+  {
+    "content_dir": "anime_cat",
+    "content_name": "cat",
+    "style_name": "anime illustration style"
+  },
+  {
+    "content_dir": "chinese_deer",
+    "content_name": "deer",
+    "style_name": "traditional Chinese painting style"
+  },
+  {
+    "content_dir": "kid_draw_teapot",
+    "content_name": "teapot",
+    "style_name": "kid crayon drawing style"
+  },
+  {
+    "content_dir": "waterpaint_dog",
+    "content_name": "dog",
+    "style_name": "watercolor painting style"
+  },
+  {
+    "content_dir": "linedraw_telephone",
+    "content_name": "telephone",
+    "style_name": "linedrawing style"
+  },
+  {
+    "content_dir": "mosaic_teapot",
+    "content_name": "teapot",
+    "style_name": "mosaic style"
+  },
+  {
+    "content_dir": "3d_umbrella",
+    "content_name": "Japenese umbrella",
+    "style_name": "3d rendering style"
+  },
+  {
+    "content_dir": "cartoon_starfish",
+    "content_name": "starfish",
+    "style_name": "cartoon art illustration style"
+  },
+  {
+    "content_dir": "cartoon_backpack",
+    "content_name": "backpack",
+    "style_name": "cartoon art flat illustration style"
+  },
+  {
+    "content_dir": "cartoon_hat",
+    "content_name": "sun hat",
+    "style_name": "flat cartoon illustration style"
+  },
+  {
+    "content_dir": "line_art_kangaroo",
+    "content_name": "kangaroo",
+    "style_name": "line art style"
+  },
+  {
+    "content_dir": "kid_crayon_bear",
+    "content_name": "bear",
+    "style_name": "kid crayon drawing style"
+  },
+  {
+    "content_dir": "3d_rose",
+    "content_name": "rose",
+    "style_name": "melting golden 3d rendering style"
+  },
+  {
+    "content_dir": "isometric_lighthouse",
+    "content_name": "lighthouse",
+    "style_name": "isometric illustration style"
+  },
+  {
+    "content_dir": "graffiti_roket",
+    "content_name": "rocket",
+    "style_name": "neon graffiti style"
+  },
+  {
+    "content_dir": "inpressionism_piano",
+    "content_name": "piano",
+    "style_name": "abstract impressionism style"
+  },
+  {
+    "content_dir": "poster_helicopter",
+    "content_name": "helicopter",
+    "style_name": "retro poster style"
+  },
+  {
+    "content_dir": "isometric_baloon",
+    "content_name": "hot air baloon",
+    "style_name": "isometric illustration style"
+  },
+  {
+    "content_dir": "watercolor_lantern1",
+    "content_name": "lantern",
+    "style_name": "watercolor style"
+  },
+  {
+    "content_dir": "vector_art_bug",
+    "content_name": "ladybug",
+    "style_name": "minimal vector art style"
+  },
+  {
+    "content_dir": "tattoo_christmas",
+    "content_name": "Christmas tree",
+    "style_name": "tattoo art style"
+  },
+  {
+    "content_dir": "logo_inkwell",
+    "content_name": "inkwell",
+    "style_name": "educational institution logo style"
+  },
+  {
+    "content_dir": "disney_cartoon_coffee_machine",
+    "content_name": "coffee machine",
+    "style_name": "disney cartoon style"
+  },
+  {
+    "content_dir": "poster_dragon",
+    "content_name": "dragon",
+    "style_name": "vintage travel poster style"
+  },
+  {
+    "content_dir": "chalk_art_fox",
+    "content_name": "fox",
+    "style_name": "chalk art style"
+  },
+  {
+    "content_dir": "papercut_art_ballon",
+    "content_name": "hot air balloon",
+    "style_name": "papercut art style"
+  },
+  {
+    "content_dir": "sunset_painting_kiwi",
+    "content_name": "kiwi fruit",
+    "style_name": "Hawaiian sunset painting style"
+  },
+  {
+    "content_dir": "chalk_art_lantern",
+    "content_name": "lantern",
+    "style_name": "chalk art style"
+  },
+  {
+    "content_dir": "geometric_microscope",
+    "content_name": "microscope",
+    "style_name": "geometric shapes style"
+  },
+  {
+    "content_dir": "steampunk_mushroom",
+    "content_name": "mushroom",
+    "style_name": "steampunk mechanical style"
+  },
+  {
+    "content_dir": "ukiyo-e_pizza",
+    "content_name": "pizza",
+    "style_name": "ukiyo-e style"
+  },
+  {
+    "content_dir": "woodblock_print_guitar",
+    "content_name": "retro guitar",
+    "style_name": "woodblock print style"
+  },
+  {
+    "content_dir": "pop_art_rose",
+    "content_name": "rose",
+    "style_name": "pop art style"
+  },
+  {
+    "content_dir": "impressionism_duck",
+    "content_name": "rubber duck",
+    "style_name": "abstract impressionism style"
+  },
+  {
+    "content_dir": "doodle_shoe",
+    "content_name": "running shoe",
+    "style_name": "doodle art style"
+  },
+  {
+    "content_dir": "origami_sunflower",
+    "content_name": "sunflower",
+    "style_name": "origami style"
+  }
+]

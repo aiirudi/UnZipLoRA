@@ -3,9 +3,9 @@ export RANK=64
 export NUM=1
 export TIMESTEP_MODE="priecewise"
 
-export content_dir="kid_crayon_bear"
-export content_name="bear"
-export style_name="kid crayon drawing style"
+export content_dir="${content_dir:-doodle_shoe}"
+export content_name="${content_name:-running shoe}"
+export style_name="${style_name:-doodle art style}"
 
 # 训练输出前缀
 export OUTPUT_DIR="models/${content_dir}/${content_dir}" 
@@ -15,7 +15,7 @@ export SAVE_DIR="output/${content_dir}/"
 # 模块启动参数配置
 #for controlling block effect
 # TFM (Token Focus Masking)
-export focus_value="true"
+export focus_value="false"
 # random matrix svd init
 export with_svd_init_value="false"
 # subb init value
