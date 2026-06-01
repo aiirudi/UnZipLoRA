@@ -488,7 +488,7 @@ class UnZipLoRALinearLayer(nn.Module):
             D_style = self.lora_matrix_dic["style_down"].weight.T.to(dtype) * merge_style * sigma_mask_style
             U_style = self.lora_matrix_dic["style_up"].weight.T.to(dtype) 
             
-            D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merge_content * sigma_mask_content
+            D_style_base = self.base_lora_matrix_dic["style_down"].T.to(dtype) * merge_style * sigma_mask_style
             U_style_base = self.base_lora_matrix_dic["style_up"].T.to(dtype)
 
             if self.masked_matrix["style"] is True: 

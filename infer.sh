@@ -15,7 +15,7 @@ export SAVE_DIR="output/${content_dir}/"
 # 模块启动参数配置
 #for controlling block effect
 # TFM (Token Focus Masking)
-export focus_value="false"
+export focus_value="true"
 # random matrix svd init
 export with_svd_init_value="false"
 # subb init value

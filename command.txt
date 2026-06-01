@@ -1,1 +1,1 @@
-python batch_run.py --continue-on-error --only inpressionism_piano watercolor_lantern1 tattoo_christmas logo_inkwell sunset_painting_kiwi chalk_art_lantern geometric_microscope woodblock_print_guitar pop_art_rose origami_sunflower
+python batch_run.py --continue-on-error --only tattoo_christmas logo_inkwell disney_cartoon_coffee_machine poster_dragon chalk_art_fox papercut_art_ballon sunset_painting_kiwi chalk_art_lantern geometric_microscope steampunk_mushroom ukiyo-e_pizza woodblock_print_guitar pop_art_rose impressionism_duck doodle_shoe origami_sunflower

@@ -960,9 +960,11 @@ def attach_recorders_to_unet(unet, token_ids, map_size=64):
         if hasattr(module, "processor") and ".attn2" in name:
             original[name] = module.processor
             w = RecordingCrossAttnProcessor(module.processor, token_ids, map_size=map_size)
+            
+            if isinstance(module.processor, torch.nn.Module):
+                del module._modules["processor"]
             module.processor = w
             wrappers.append(w)
-
     return wrappers, original
 
 

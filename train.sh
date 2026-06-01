@@ -55,7 +55,7 @@ export align_loss_effect="true"
 #gsa loss
 export gsa_loss_effect="true"
 # random matrix svd init
-export with_svd_init_value="false"
+export with_svd_init_value="true"
 # subb init value
 export use_base_weight_value="false"
 #unsymmetrical time control mask

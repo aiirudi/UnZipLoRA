@@ -1997,17 +1997,17 @@ def main(args):
     print(f"Sampled steps {sampled_steps}")
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
-    if accelerator.is_main_process: # 这段代码的主要作用就是初始化 WandB 跟踪器
+    if accelerator.is_main_process: # 这段代码的主要作 用就是初始化 WandB 跟踪器
         config = vars(args)
         if args.wandb_dir is None:
-            accelerator.init_trackers("unziplora + M1 + M2", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2(fused)", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity
                     }
                 })
         else:
-            accelerator.init_trackers("unziplora + M1 + M2", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2(fused)", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity,
@@ -2196,6 +2196,7 @@ def main(args):
             if not ENABLE_LORA_CAPTURE:
                 return 
             content_inp = args[0]
+            sigma_mask_content = args[2] if len(args) > 2 else  kwargs.get("sigma_mask_content", None)
 
             D = module.lora_matrix_dic["content_down"].weight.T * module.merge_content
             U = module.lora_matrix_dic["content_up"].weight.T
@@ -2203,8 +2204,14 @@ def main(args):
             D_base = module.base_lora_matrix_dic["content_down"].T * module.merge_content
             U_base = module.base_lora_matrix_dic["content_up"].T
 
+            # 启用时间步mask
+            if sigma_mask_content is not None:
+                sigma_mask_content = sigma_mask_content.to(device=D.device, dtype=D.dtype)
+                D = D * sigma_mask_content
+                D_base = D_base * sigma_mask_content
+
             if module.masked_matrix["content"]:
-                D = D *  module.mask_content
+                D = D * module.mask_content
                 D_base = D_base * module.mask_content
             
             weight_content = D @ U
@@ -2238,7 +2245,8 @@ def main(args):
       f"style_rare_word='{args.style_rare_word}' 未在 instance_prompt 中找到，检查 train.sh"
 
 
-    def _compute_to_k_no_hook(attn, enc, enc_c, enc_s):
+    def _compute_to_k_no_hook(attn, enc, enc_c, enc_s,
+    sigma_mask_content=None, sigma_mask_style=None):
         """
         等价于直接用 attn.to_k 调用forward 但是为了避免再调用一个 content LoRA 的 hook 所以这里改成直接计算
         """
@@ -2259,6 +2267,12 @@ def main(args):
 
             D_c_base = lora.base_lora_matrix_dic["content_down"].T * lora.merge_content
             U_c_base = lora.base_lora_matrix_dic["content_up"].T
+            
+            if sigma_mask_content is not None:
+                smc = sigma_mask_content.to(device=D_c.device, dtype=D_c.dtype)
+                D_c = D_c * smc
+                D_c_base = D_c_base * smc
+            
             if lora.masked_matrix.get("content", False):
                 D_c = D_c * lora.mask_content
                 D_c_base = D_c_base * lora.mask_content
@@ -2270,7 +2284,7 @@ def main(args):
             else:
                 weight = weight_content
 
-            delta_c = hs_c.to(dtype) @ (weight_content - base_weight_content)
+            delta_c = hs_c.to(dtype) @ weight
 
             if lora.use_mask and UnZipLoRALinearLayer._active_mask_content is not None:
                 delta_c = delta_c * UnZipLoRALinearLayer._active_mask_content.to(delta_c.dtype)
@@ -2280,6 +2294,12 @@ def main(args):
 
         D_s_base = lora.base_lora_matrix_dic["style_down"].T * lora.merge_style
         U_s_base = lora.base_lora_matrix_dic["style_up"].T        
+
+        if sigma_mask_style is not None:
+            sms = sigma_mask_style.to(device=D_s.device, dtype=D_s.dtype)
+            D_s = D_s * sms
+            D_s_base = D_s_base * sms
+
 
         if lora.masked_matrix.get("style", False):
             D_s = D_s * lora.mask_style
@@ -2309,10 +2329,13 @@ def main(args):
                 return 
             
             hidden_states = args[0] if len(args) > 0 else kwargs['hidden_states']
-            
+
             enc = kwargs.get("encoder_hidden_states", None)
             enc_c = kwargs.get("encoder_hidden_states_content", None)
             enc_s = kwargs.get("encoder_hidden_states_style", None)
+
+            sigma_mask_content = kwargs.get("sigma_mask_content", None)
+            sigma_mask_style = kwargs.get("sigma_mask_style", None)
 
             if enc is None:
                 return
@@ -2321,11 +2344,14 @@ def main(args):
                 if isinstance(attn.to_q.lora_layer, UnZipLoRALinearLayer):
                     q = attn.to_q(hidden_states,
                                 hidden_states_1=hidden_states,
-                                hidden_states_2=hidden_states)
+                                hidden_states_2=hidden_states,
+                                sigma_mask_content=sigma_mask_content,
+                                sigma_mask_style=sigma_mask_style)
                 else:
                     q = attn.to_q(hidden_states)
 
-            k = _compute_to_k_no_hook(attn, enc, enc_c, enc_s) 
+            k = _compute_to_k_no_hook(attn, enc, enc_c, enc_s
+            , sigma_mask_content, sigma_mask_style) 
             
             q = attn.head_to_batch_dim(q)
             k = attn.head_to_batch_dim(k)
