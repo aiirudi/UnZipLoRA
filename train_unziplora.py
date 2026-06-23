@@ -2000,14 +2000,14 @@ def main(args):
     if accelerator.is_main_process: # 这段代码的主要作 用就是初始化 WandB 跟踪器
         config = vars(args)
         if args.wandb_dir is None:
-            accelerator.init_trackers("unziplora + M1 + M2(fused)", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2 + svd_init", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity
                     }
                 })
         else:
-            accelerator.init_trackers("unziplora + M1 + M2(fused)", config=config, 
+            accelerator.init_trackers("unziplora + M1 + M2 + svd_init", config=config, 
                 init_kwargs={
                     "wandb": {
                     "entity": args.entity,
@@ -2622,12 +2622,10 @@ def main(args):
                     mask_class = super_mask.unsqueeze(-1)
 
                     for base_out, delta_out in zip(base_capture["k"], lora_content_capture['k']):
-                        total_rare = (base_out + delta_out) * mask_rare
-                        base_cls = base_out * mask_class
-
                         if mask_rare.any() and mask_class.any():
-                            rare_vec = total_rare[mask_rare.squeeze(-1)].view(-1, total_rare.size(-1))
-                            cls_vec = base_cls[mask_class.squeeze(-1)].view(-1, base_cls.size(-1))
+                            total = base_out + delta_out
+                            rare_vec = (total * mask_rare).sum(dim=(0,1)) / mask_rare.sum().clamp(min=1)
+                            cls_vec = (base_out * mask_class).sum(dim=(0,1)) / mask_class.sum().clamp(min=1)
                             align_sum += (rare_vec - cls_vec).abs().mean()
                             n_terms += 1
 

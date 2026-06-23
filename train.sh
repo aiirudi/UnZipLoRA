@@ -1,7 +1,7 @@
 export MODEL_NAME="/home/xzh/xzh/pretrained/sd_xl_base_1.0"
 
 #heatmap parameter
-CONTENT_RARE_TOKEN="sks"          # 例如：xlo
+CONTENT_RARE_TOKEN="monadikos"          # 例如：xlo
 SUPER_WORD='dog'
 
 export content_dir="${content_dir:-origami_sunflower}"
@@ -21,10 +21,10 @@ export weight_lr=0.005
 export similarity_lambda=0.5
 export RANK=64
 export WANDB_NAME="unziplora+M1+M2(fused)"
-export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA/instance_data/${content_dir}"
+export INSTANCE_DIR="/home/xzh/xzh/UnZipLoRA-fine/instance_data/${content_dir}"
 export OUTPUT_DIR="models/${content_dir}/${content_dir}"
 export STEPS=600
-# Training prompt 
+# Training prom6t 
 
 # both prompt
 export PROMPT="A ${CONTENT_RARE_TOKEN} ${content_name} in ${style_name}"
@@ -49,17 +49,17 @@ export WANDB_PROJECT="unziplora"
 # 模块启动参数配置
 #for controlling block effect
 # TFM (Token Focus Masking)
-export focus_value="true"
+export focus_value="false"
 # TAL
 export align_loss_effect="true"
 #gsa loss
-export gsa_loss_effect="true"
+export gsa_loss_effect="false"
 # random matrix svd init
 export with_svd_init_value="true"
 # subb init value
-export use_base_weight_value="false"
+export use_base_weight_value="true"
 #unsymmetrical time control mask
-export use_time_control_value="false"
+export use_time_control_value="true"
 
 
 accelerate launch train_unziplora.py \

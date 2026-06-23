@@ -856,9 +856,9 @@ class StableDiffusionXLSingleLoRAPipeline(StableDiffusionXLPipeline):
             lora_prefix = f"unet.unet.{name_pre}"
             base_prefix = f"unet.{name_pre}"
 
-            print(f"-------------------------------{name}-------------------------------")
-            print(f"{lora_prefix}")
-            print(f"{base_prefix}")
+            #print(f"-------------------------------{name}-------------------------------")
+            #print(f"{lora_prefix}")
+            #print(f"{base_prefix}")
 
             if hasattr(processor, "load_from_state_dicts"):
                 #print("enter load_from_state_dicts")

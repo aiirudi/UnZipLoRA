@@ -16,7 +16,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "instance_data" / "train_prompts.json"
-DEFAULT_INSTANCE_ROOT = Path("/home/xzh/xzh/UnZipLoRA/instance_data")
+DEFAULT_INSTANCE_ROOT = Path("/home/xzh/xzh/UnZipLoRA-fine/instance_data")
 EVAL_SCRIPT = Path("/home/xzh/xzh/lora_evaluate/evaluate.py")
 DEFAULT_METRICS_JSON = REPO_ROOT / "metrics.json"
 

@@ -3,9 +3,9 @@ export RANK=64
 export NUM=1
 export TIMESTEP_MODE="priecewise"
 
-export content_dir="${content_dir:-doodle_shoe}"
-export content_name="${content_name:-running shoe}"
-export style_name="${style_name:-doodle art style}"
+export content_dir="${content_dir:-tattoo_christmas}"
+export content_name="${content_name:-Christmas tree}"
+export style_name="${style_name:-tattoo art style}"
 
 # 训练输出前缀
 export OUTPUT_DIR="models/${content_dir}/${content_dir}" 
@@ -17,7 +17,7 @@ export SAVE_DIR="output/${content_dir}/"
 # TFM (Token Focus Masking)
 export focus_value="true"
 # random matrix svd init
-export with_svd_init_value="false"
+export with_svd_init_value="true"
 # subb init value
 export use_base_weight_value="false"
 #unsymmetrical time control mask
@@ -25,8 +25,8 @@ export use_time_control_value="false"
 
 
 export VALID_PROMPTS=(
-  "a sks ${content_name} on a skateboard in ${style_name}"
-  "a sks ${content_name} in a snowy landscape in ${style_name}"
+  "a monadikos ${content_name} on a skateboard in ${style_name}"
+  "a monadikos ${content_name} in a snowy landscape in ${style_name}"
 )
 VALID_PROMPT=$(IFS=,; echo "${VALID_PROMPTS[*]}")
 export VALID_PROMPT
@@ -40,15 +40,15 @@ VALID_STYLE=$(IFS=,; echo "${VALID_STYLES[*]}")
 export VALID_STYLE
 
 export VALID_CONTENTS=(
-  "a sks ${content_name} on a skateboard"
-  "a sks ${content_name} in a snowy landscape"
+  "a monadikos ${content_name} on a skateboard"
+  "a monadikos ${content_name} in a snowy landscape"
 )
 VALID_CONTENT=$(IFS=,; echo "${VALID_CONTENTS[*]}")
 export VALID_CONTENT
 
 export VALID_CONTENT_RECON_PROMPTS=(
-  "A photo of sks ${content_name} on a table"
-  "A photo of sks ${content_name} in a beach"
+  "A photo of monadikos ${content_name} on a table"
+  "A photo of monadikos ${content_name} in a beach"
 )
 VALID_CONTENT_RECON_PROMPT=$(IFS=,; echo "${VALID_CONTENT_RECON_PROMPTS[*]}")
 export VALID_CONTENT_RECON_PROMPT
@@ -75,7 +75,7 @@ accelerate launch infer.py \
   --use_base_weight="${use_base_weight_value}" \
   --alpha=1.0 \
   --focus_value="${focus_value}" \
-  --content_rare_word="sks" \
+  --content_rare_word="monadikos" \
   --min_rank_content=32 \
   --min_rank_style=24 \
   --timestep_mode="${TIMESTEP_MODE}" \
