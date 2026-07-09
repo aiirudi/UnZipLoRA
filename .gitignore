@@ -1,0 +1,11 @@
+wandb/
+*.wandb
+output/
+outputs/
+checkpoint*/
+checkpoints/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
