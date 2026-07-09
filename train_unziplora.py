@@ -2233,7 +2233,7 @@ def main(args):
             """
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
         return _hook
-
+    """
     # 在 both prompt 中加入提示词
     style_rare_1, _ = build_token_masks(tokenizer_one, [args.instance_prompt], 
     rare_word = args.style_rare_word, super_word="", device=accelerator.device)
@@ -2243,7 +2243,61 @@ def main(args):
     style_token_ids = torch.where(style_rare_mask[0])[0].tolist()
     assert len(style_token_ids) > 0, \
       f"style_rare_word='{args.style_rare_word}' 未在 instance_prompt 中找到，检查 train.sh"
+    """
 
+    # New GSA token indexing:
+    # Map style-token positions from the both-prompt coordinate system
+    # into the style-prompt coordinate system.
+    def _style_ids_from_both_to_style_prompt(tokenizer):
+        content_rare_ids = tokenizer(
+            args.content_rare_word,
+            add_special_tokens=False,
+            return_tensors="pt",
+        ).input_ids
+
+        style_rare_ids = tokenizer(
+            args.style_rare_word,
+            add_special_tokens=False,
+            return_tensors="pt",
+        ).input_ids
+
+        both_prompt_ids = tokenize_prompt(
+            tokenizer,
+            args.instance_prompt,
+        )
+
+        content_rare_mask = torch.isin(
+            both_prompt_ids,
+            content_rare_ids,
+        )
+        style_rare_mask = torch.isin(
+            both_prompt_ids,
+            style_rare_ids,
+        )
+
+        mapped_style_ids = []
+
+        for style_id in torch.where(style_rare_mask[0])[0].tolist():
+            # Only remove content rare tokens located before this style token.
+            content_token_count = int(
+                content_rare_mask[0, :style_id].sum().item()
+            )
+            mapped_style_id = style_id - content_token_count
+            mapped_style_ids.append(mapped_style_id)
+
+        return mapped_style_ids
+
+    style_token_ids_1 = _style_ids_from_both_to_style_prompt(
+        tokenizer_one
+    )
+    style_token_ids_2 = _style_ids_from_both_to_style_prompt(
+        tokenizer_two
+    )
+
+    # Preserve the previous dual-tokenizer union behavior.
+    style_token_ids = sorted(
+        set(style_token_ids_1 + style_token_ids_2)
+    )
 
     def _compute_to_k_no_hook(attn, enc, enc_c, enc_s,
     sigma_mask_content=None, sigma_mask_style=None):
