@@ -48,7 +48,7 @@ export VALID_CONTENT
 
 export VALID_CONTENT_RECON_PROMPTS=(
   "A photo of monadikos ${content_name} on a table"
-  "A photo of monadikos ${content_name} in a beach"
+  "A photo of monadikos ${content_name} in a beach"\
   "A photo of monadikos ${content_name} in the river"
   "A photo of monadikos ${content_name} next to another ${content_name}"
   "A photo of monadikos ${content_name} in a snowy landscape"

@@ -227,102 +227,156 @@ class UnZipLoRALinearLayer(nn.Module):
         return out_mat
     
 
-    def get_unziplora_cone(self, key, accumulate=True):
-        '''
-        Compute cone value for both style and content, store the value in self.column_score
-        Will be used when all columns are used ==> The computed cone will help determine which columns \
-        will be used in following training ==> the filter will not included in computation
-        Theratically(if no bugs), every parameters except merger will have gradient
-        '''
-        merge_matrix = getattr(self, f"merge_{key}") #merge_matrix.shape: (out_features)
-        merger_gradient = merge_matrix.grad # (out_features, )
+    # def get_unziplora_cone(self, key, accumulate=True):
+    #     '''
+    #     Compute cone value for both style and content, store the value in self.column_score
+    #     Will be used when all columns are used ==> The computed cone will help determine which columns \
+    #     will be used in following training ==> the filter will not included in computation
+    #     Theratically(if no bugs), every parameters except merger will have gradient
+    #     '''
+    #     merge_matrix = getattr(self, f"merge_{key}") #merge_matrix.shape: (out_features)
+    #     merger_gradient = merge_matrix.grad # (out_features, )
         
-        """
-        # 考虑合并后的梯度， 原代码
-        if merger_gradient is None: 
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
-                merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix        
-            else:
-                merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.grad.T @ self.lora_matrix_dic[f"{key}_up"].weight.data.T * merge_matrix +\
-                                self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix
-        else:
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
-                merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix + \
-                                merged_weight * merger_gradient
-            else:
-                merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.grad.T @ self.lora_matrix_dic[f"{key}_up"].weight.data.T * merge_matrix +\
-                                self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix + \
-                                merged_weight * merger_gradient
-        """
+    #     """
+    #     # 考虑合并后的梯度， 原代码
+    #     if merger_gradient is None: 
+    #         if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+    #             merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix        
+    #         else:
+    #             merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.grad.T @ self.lora_matrix_dic[f"{key}_up"].weight.data.T * merge_matrix +\
+    #                             self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix
+    #     else:
+    #         if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+    #             merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix + \
+    #                             merged_weight * merger_gradient
+    #         else:
+    #             merged_gradient = self.lora_matrix_dic[f"{key}_down"].weight.grad.T @ self.lora_matrix_dic[f"{key}_up"].weight.data.T * merge_matrix +\
+    #                             self.lora_matrix_dic[f"{key}_down"].weight.data.T @ self.lora_matrix_dic[f"{key}_up"].weight.grad.T * merge_matrix + \
+    #                             merged_weight * merger_gradient
+    #     """
 
 
-        if merger_gradient is None:
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T  * merge_matrix.view(1, -1)
-                U = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+    #     if merger_gradient is None:
+    #         if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+    #             dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T  * merge_matrix.view(1, -1)
+    #             U = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                # 修改后改用 cross attention 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone = attn_cone_dL_dD
-            else:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
+    #             # 修改后改用 cross attention 进行计算
+    #             attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+    #             attn_cone = attn_cone_dL_dD
+    #         else:
+    #             D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
+    #             U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+    #             dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
+    #             dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                # 修改后改用 cross_attntion 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
+    #             # 修改后改用 cross_attntion 进行计算
+    #             attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+    #             attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
-        else:
-            if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
+    #             attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
+    #     else:
+    #         if self.lora_matrix_dic[f"{key}_down"].weight.grad is None:
+    #             D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
+    #             U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
                 
-                dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+    #             dL_dD = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
+    #             dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                # 修改后用cross-attention 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
+    #             # 修改后用cross-attention 进行计算
+    #             attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+    #             attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
+    #             attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
 
-            else:
-                D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
-                U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
+    #         else:
+    #             D = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merge_matrix.view(1, -1)
+    #             U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
                 
-                dD_dB = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
-                dD_dmerge = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
-                dL_dD = dD_dB + dD_dmerge
-                dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
+    #             dD_dB = self.lora_matrix_dic[f"{key}_down"].weight.grad.T * merge_matrix.view(1, -1)
+    #             dD_dmerge = self.lora_matrix_dic[f"{key}_down"].weight.data.T * merger_gradient.view(1, -1)
+    #             dL_dD = dD_dB + dD_dmerge
+    #             dL_dU = self.lora_matrix_dic[f"{key}_up"].weight.grad.T
 
-                # 修改后用cross-attention 进行计算
-                attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
-                attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
+    #             # 修改后用cross-attention 进行计算
+    #             attn_cone_dL_dD = self._scaled_dot_product_cross_attention(q=dL_dD, k=U, v=U)
+    #             attn_cone_dL_dU = self._scaled_dot_product_cross_attention(q=D, k=dL_dU, v=dL_dU)
                 
-                attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
+    #             attn_cone = attn_cone_dL_dD + attn_cone_dL_dU
 
     
-        D = self.lora_matrix_dic[f"{key}_down"].weight.data.T
-        U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
+    #     D = self.lora_matrix_dic[f"{key}_down"].weight.data.T
+    #     U = self.lora_matrix_dic[f"{key}_up"].weight.data.T
 
-        # cone.shape (rank,)
-        # 这里也可以用 D * attn_cone 当作key, U 当作 k, v 再来一次 CA 计算出最后的 cone
-        cone = D.sum(dim=0) * attn_cone * U.sum(dim=1)
+    #     # cone.shape (rank,)
+    #     # 这里也可以用 D * attn_cone 当作key, U 当作 k, v 再来一次 CA 计算出最后的 cone
+    #     cone = D.sum(dim=0) * attn_cone * U.sum(dim=1)
 
-        # 如果是累积，则就是对每个 lora layer 统计 cone
-        if accumulate: 
-            # 下面这个是 abs-cone 方法， 先尝试原方法在尝试 abs-cone 方法
-            # setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
-            setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
-        else: 
-            # 如果不是累积那么就是要选列了，torch.abs(cone) > 1e-5 是用来判断列的“活跃度”
-            # 每一列的非 0 数的总和/行数， 就代表这个列的活跃度
+    #     # 如果是累积，则就是对每个 lora layer 统计 cone
+    #     if accumulate: 
+    #         # 下面这个是 abs-cone 方法， 先尝试原方法在尝试 abs-cone 方法
+    #         # setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
+    #         setattr(self, f"column_score_{key}", getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
+    #     else: 
+    #         # 如果不是累积那么就是要选列了，torch.abs(cone) > 1e-5 是用来判断列的“活跃度”
+    #         # 每一列的非 0 数的总和/行数， 就代表这个列的活跃度
+    #         cone_sparsity = torch.abs(cone)
+    #         setattr(self, f"column_score_{key}", cone_sparsity)
+    
+    def get_unziplora_cone(self, key, accumulate=True):
+        '''
+        Compute cone value for both style and content, store the value in self.column_score.
+
+        原理（与原始 column 维度 cone 完全一致，只是聚合目标从 out_features 变为 rank）：
+        1. 将合并权重 W = D @ U 分解为每个 rank r 的贡献 W_r = D[:,r] ⊗ U[r,:]
+        2. 计算每个 rank r 贡献上的有效梯度 dW_r/dt
+        3. cone[r] = Σ_{i,j} W_r[i,j] × (dW_r/dt)[i,j]
+        '''
+        merge_matrix = getattr(self, f"merge_{key}")               # (rank,)
+        merger_gradient = merge_matrix.grad                          # (rank,) or None
+
+        # D = down.T * merge: (in_features, rank)
+        down_weight = self.lora_matrix_dic[f"{key}_down"].weight    # (rank, in_features)
+        D = down_weight.data.T * merge_matrix.view(1, -1)           # (in_features, rank)
+
+        # U = up.T: (rank, out_features)
+        up_weight = self.lora_matrix_dic[f"{key}_up"].weight        # (out_features, rank)
+        U = up_weight.data.T                                         # (rank, out_features)
+
+        # ---- grad_D: (in_features, rank), 对应 dL_dd_r ----
+        grad_down = down_weight.grad                                 # (rank, in_features) or None
+        if grad_down is not None:
+            grad_D = grad_down.T * merge_matrix.view(1, -1)         # grad_down.T * merge
+        else:
+            grad_D = torch.zeros_like(D)
+
+        if merger_gradient is not None:
+            grad_D = grad_D + down_weight.data.T * merger_gradient.view(1, -1)
+
+        # ---- grad_U: (rank, out_features), 对应 dL_du_r ----
+        grad_up = up_weight.grad                  
+        if grad_up is not None:
+            grad_U = grad_up.T                     
+        else:
+            grad_U = torch.zeros_like(U)
+
+        # ---- cone[r] = (d_r · dL_dd_r) * ||u_r||² + ||d_r||² * (u_r · dL_du_r) ----
+        d_dot_dL_dd = (D * grad_D).sum(dim=0)    # 和
+        u_norm_sq   = (U * U).sum(dim=1)         # (rank,)  — 对 out_features 求和
+        d_norm_sq   = (D * D).sum(dim=0)         #
+        u_dot_dL_du = (U * grad_U).sum(dim=1)    # (rank,)  — 对 out_features 求和
+
+        cone = d_dot_dL_dd * u_norm_sq + d_norm_sq * u_dot_dL_du
+
+        if accumulate:
+            setattr(self, f"column_score_{key}",
+                    getattr(self, f"column_score_{key}").to(self.device) + torch.abs(cone.to(self.device)))
+        else:
+            # 与原始一致：非累积模式下计算稀疏度分数
             cone_sparsity = torch.abs(cone)
             setattr(self, f"column_score_{key}", cone_sparsity)
+    
     
     """
     对 merge_content / merge_style 的梯度"按列做门控", 控制哪些列的 merge_content 和 merge_style 可以更新。

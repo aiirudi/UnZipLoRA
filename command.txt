@@ -26,4 +26,20 @@ python batch_run.py --continue-on-error --only sunset_painting_kiwi chalk_art_la
 python batch_run.py --continue-on-error --only pop_art_rose impressionism_duck doodle_shoe origami_sunflower
 
 # TAL + TFM + svd_init (800 steps 没跑完的)
-python batch_run.py --continue-on-error --only mosaic_teapot 3d_umbrella cartoon_backpack cartoon_hat line_art_kangaroo kid_crayon_bear 3d_rose isometric_lighthouse inpressionism_piano isometric_baloon watercolor_lantern1 vector_art_bug logo_inkwell chalk_art_fox papercut_art_ballon sunset_painting_kiwi chalk_art_lantern geometric_microscope woodblock_print_guitar 
+python batch_run.py --continue-on-error --only cartoon_dog watercolor_horse anime_cat chinese_deer kid_draw_teapot waterpaint_dog linedraw_telephone mosaic_teapot 3d_umbrella cartoon_starfish cartoon_backpack cartoon_hat line_art_kangaroo kid_crayon_bear 3d_rose isometric_lighthouse graffiti_roket inpressionism_piano poster_helicopter isometric_baloon watercolor_lantern1 vector_art_bug tattoo_christmas logo_inkwell disney_cartoon_coffee_machine poster_dragon chalk_art_fox papercut_art_ballon sunset_painting_kiwi chalk_art_lantern geometric_microscope steampunk_mushroom ukiyo-e_pizza woodblock_print_guitar pop_art_rose impressionism_duck doodle_shoe origami_sunflower
+
+python batch_run.py --continue-on-error --only 3d_rose isometric_lighthouse graffiti_roket inpressionism_piano poster_helicopter isometric_baloon watercolor_lantern1 vector_art_bug tattoo_christmas logo_inkwell disney_cartoon_coffee_machine poster_dragon chalk_art_fox papercut_art_ballon sunset_painting_kiwi chalk_art_lantern geometric_microscope steampunk_mushroom ukiyo-e_pizza woodblock_print_guitar pop_art_rose impressionism_duck doodle_shoe origami_sunflower
+
+python batch_run.py --continue-on-error --only isometric_lighthouse graffiti_roket doodle_shoe origami_sunflower
+
+
+# 有些训练完了但是好像没有推理
+python batch_run.py --continue-on-error --skip-train --only sketch_cat flat_cartoon_teapot cartoon_dog watercolor_horse anime_cat chinese_deer kid_draw_teapot
+
+
+python batch_run.py --continue-on-error --only  waterpaint_dog linedraw_telephone mosaic_teapot 3d_umbrella cartoon_starfish cartoon_backpack cartoon_hat line_art_kangaroo kid_crayon_bear 3d_rose isometric_lighthouse graffiti_roket inpressionism_piano poster_helicopter isometric_baloon watercolor_lantern1 vector_art_bug tattoo_christmas logo_inkwell disney_cartoon_coffee_machine poster_dragon chalk_art_fox papercut_art_ballon sunset_painting_kiwi chalk_art_lantern geometric_microscope steampunk_mushroom ukiyo-e_pizza woodblock_print_guitar pop_art_rose impressionism_duck doodle_shoe origami_sunflower
+
+
+python batch_run.py --continue-on-error --only sketch_cat cartoon_dog
+
+等下跑完推理之后到kid_crayon_bear 都可以删除

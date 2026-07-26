@@ -131,6 +131,13 @@ def run_one(entry: dict, args, instance_root: Path) -> bool:
         update_metrics_json(Path(args.metrics_json), content_dir, record)
         print(f"[metrics] {content_dir}: {metrics}", flush=True)
 
+    # 额外推理：infer_backup.sh 多了一些 prompt 来生成更多图片用于画图，但不参与指标计算
+    if not args.skip_infer_extra:
+        rc = run_step("INFER_EXTRA", REPO_ROOT / "infer_backup.sh", env, log_path)
+        if rc != 0:
+            print(f"[fail] infer_extra rc={rc} for {content_dir}", flush=True)
+            return False
+
     return True
 
 
@@ -149,6 +156,9 @@ def main():
     p.add_argument("--skip-infer", action="store_true")
     p.add_argument("--skip-eval", action="store_true",
                    help="Skip running evaluate.py and updating metrics JSON")
+    p.add_argument("--skip-infer-extra", action="store_true",
+                   help="Skip running infer_backup.sh (extra images for plotting, "
+                        "not needed for metrics)")
     p.add_argument("--metrics-json", default=str(DEFAULT_METRICS_JSON),
                    help="Path to the JSON file where evaluation metrics are accumulated")
     p.add_argument("--continue-on-error", action="store_true",

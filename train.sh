@@ -51,15 +51,15 @@ export WANDB_PROJECT="unziplora"
 # TFM (Token Focus Masking)
 export focus_value="false"
 # TAL
-export align_loss_effect="true"
+export align_loss_effect="false"
 #gsa loss
-export gsa_loss_effect="false"
+export gsa_loss_effect="true"
 # random matrix svd init
-export with_svd_init_value="true"
+export with_svd_init_value="false"
 # subb init value
-export use_base_weight_value="true"
+export use_base_weight_value="false"
 #unsymmetrical time control mask
-export use_time_control_value="true"
+export use_time_control_value="false"
 
 
 accelerate launch train_unziplora.py \
@@ -84,7 +84,6 @@ accelerate launch train_unziplora.py \
   --checkpointing_steps=200 \
   --mixed_precision="fp16" \
   --seed="0" \
-  --use_8bit_adam \
   --validation_content="${VALID_CONTENT}" \
   --validation_style="${VALID_STYLE}" \
   --validation_prompt="${VALID_PROMPT}" \

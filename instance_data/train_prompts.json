@@ -1,5 +1,10 @@
 [
   {
+    "content_dir": "sketch_cat",
+    "content_name": "cat",
+    "style_name": "sketch style"
+  },
+  {
     "content_dir": "flat_cartoon_teapot",
     "content_name": "teapot",
     "style_name": "flat cartoon illustration style"
@@ -13,11 +18,6 @@
     "content_dir": "watercolor_horse",
     "content_name": "horse",
     "style_name": "watercolor painting style"
-  },
-  {
-    "content_dir": "sketch_cat",
-    "content_name": "cat",
-    "style_name": "sketch style"
   },
   {
     "content_dir": "anime_cat",

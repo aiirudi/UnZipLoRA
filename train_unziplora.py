@@ -2233,7 +2233,7 @@ def main(args):
             """
             lora_content_capture[kind].append(content_out.to(content_inp.dtype))
         return _hook
-    """
+    
     # 在 both prompt 中加入提示词
     style_rare_1, _ = build_token_masks(tokenizer_one, [args.instance_prompt], 
     rare_word = args.style_rare_word, super_word="", device=accelerator.device)
@@ -2298,6 +2298,7 @@ def main(args):
     style_token_ids = sorted(
         set(style_token_ids_1 + style_token_ids_2)
     )
+    """
 
     def _compute_to_k_no_hook(attn, enc, enc_c, enc_s,
     sigma_mask_content=None, sigma_mask_style=None):
