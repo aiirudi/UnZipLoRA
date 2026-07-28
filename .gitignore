@@ -1,12 +1,31 @@
-wandb/
-*.wandb
+
+# Python cache
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Training output
 output/
 outputs/
-model/
-checkpoint*/
+logs/
+runs/
+wandb/
 checkpoints/
-*.safetensors
-*.ckpt
+
+# Data
+data/
+datasets/
+
+# Model weights
 *.pt
 *.pth
+*.ckpt
+*.safetensors
 *.bin
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.7z
+EOF

@@ -257,5 +257,26 @@
     "csd_content": 0.4969,
     "csd_style": 0.6281,
     "evaluated_at": "2026-07-26 08:21:46"
+  },
+  "impressionism_duck": {
+    "clipI_style": 0.6969,
+    "dino_content": 0.6073,
+    "csd_content": 0.636,
+    "csd_style": 0.6764,
+    "evaluated_at": "2026-07-26 09:24:05"
+  },
+  "doodle_shoe": {
+    "clipI_style": 0.6167,
+    "dino_content": 0.4571,
+    "csd_content": 0.4596,
+    "csd_style": 0.5552,
+    "evaluated_at": "2026-07-26 10:25:01"
+  },
+  "origami_sunflower": {
+    "clipI_style": 0.6489,
+    "dino_content": 0.6397,
+    "csd_content": 0.6426,
+    "csd_style": 0.5389,
+    "evaluated_at": "2026-07-26 11:30:29"
   }
 }
